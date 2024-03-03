@@ -21,6 +21,8 @@ source("/Users/gdunlap/Desktop/Rao_Lab/AMP_Phase_2/manuscript/AMP_manuscript_fun
 
 setwd("/Rao_Lab/AMP_Phase_2/manuscript/analysis/")
 
+load("20220319_AMP_initialclusterings.RData") #product of tcellprep
+
 
 # Final subsetting CD8 T cells -----------------------------------------------------
 rm(initialCD8)
