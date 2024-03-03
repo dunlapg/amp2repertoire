@@ -1,0 +1,1926 @@
+library(Seurat)
+library(dplyr)
+library(harmony)
+library(symphony)
+library(ggplot2)
+library(RColorBrewer)
+library(scRepertoire)
+library(patchwork)
+library(cowplot)
+library(pheatmap)
+library(ggpubr)
+library(rstatix)
+library(tidyr)
+library(stringr)
+library(circlize)
+library(ComplexHeatmap)
+library(CellChat)
+library(UpSetR)
+source("/Users/gdunlap/Desktop/Rao_Lab/AMP_Phase_2/manuscript/AMP_manuscript_functions.R")
+
+
+setwd("/Rao_Lab/AMP_Phase_2/manuscript/analysis/")
+
+
+# Final subsetting CD8 T cells -----------------------------------------------------
+rm(initialCD8)
+
+Idents(clust_30PC_res03_seurat_Tcells) <- rownames(clust_30PC_res03_seurat_Tcells@meta.data)
+finalCD8 <- subset(clust_30PC_res03_seurat_Tcells, idents = c(CD8cells_fromCD8, CD8cells_fromCD4, CD8cells_fromprolif))
+Idents(finalCD8) <- finalCD8$seurat_clusters
+
+finalCD8$tissue_source <- factor(finalCD8$tissue_source, levels = c("SYN", "PBL"))
+finalCD8$sampleTissue_Pub <- factor(finalCD8$sampleTissue_Pub, levels = c("RA01_SYN", "RA01_PBL", "RA02_SYN", "RA02_PBL", "RA03_SYN", "RA03_PBL", "RA04_SYN", "RA04_PBL", "RA05_SYN", "RA05_PBL", "RA06_SYN", "RA06_PBL", "RA07_SYN", "RA07_PBL", "RA08_SYN", "RA09_SYN", "RA10_SYN", "RA10_PBL", "RA11_SYN", "RA11_PBL", "RA12_SYN", "RA12_PBL"))
+
+Idents(finalCD8) <- finalCD8$seurat_clusters
+
+finalCD8 <- NormalizeData(finalCD8, normalization.method = "LogNormalize", scale.factor = 10000)
+finalCD8 <- FindVariableFeatures(finalCD8, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(finalCD8), 10)
+
+all.genes <- rownames(finalCD8)
+finalCD8 <- ScaleData(finalCD8, vars.to.regress = c("subsets_Mito_percent"), features = all.genes)
+finalCD8 <- RunPCA(finalCD8, features = VariableFeatures(object = finalCD8))
+
+dims_use = 1:40
+finalCD8 <- RunHarmony(finalCD8, group.by.vars=c("sample_ID_Pub", "tissue_source"))
+finalCD8 <- RunUMAP(object=finalCD8, reduction="harmony", dims=dims_use, verbose=FALSE)
+finalCD8 <- FindNeighbors(object=finalCD8, reduction="harmony", dims=dims_use, verbose=FALSE)
+finalCD8 <- FindClusters(object=finalCD8, resolution=0.4, verbose=FALSE)
+
+cd8tcellcount_add <- finalCD8@meta.data %>% group_by(sampleTissue_Pub) %>% add_tally(name = "sample_cd8tcellcount")
+finalCD8$cd8tcellCount <- cd8tcellcount_add$sample_cd8tcellcount
+
+CD8Tcell_markers <- FindAllMarkers(object=finalCD8, only.pos = TRUE, logfc.threshold = 0.50, min.pct = 0.40)
+
+cd8cols <- c(colorRampPalette(brewer.pal(10, "Paired"))(10))
+DimPlot(finalCD8) + 
+  scale_color_manual(values = cd8cols) +
+  ggtitle(NULL) + xlab("UMAP 1") + ylab("UMAP 2")
+
+DotPlot(finalCD8, features = rev(c("CD8B", "SELL", "LEF1", "CD69", "IL7R", "GZMK", "GZMB", 
+                                   "CCL5", "GNLY", "PRF1", "TIGIT", "PDCD1", "IFIT3", "OASL"))) + 
+  coord_flip() + 
+  RotatedAxis() + 
+  xlab(NULL) + ylab(NULL) + 
+  scale_color_distiller(palette = "Reds", direction = 1)
+
+DotPlot(finalCD8, features = c("CD8B", "SELL", "LEF1", "CD69", "IL7R", "GZMK", "GZMB", "GZMA", "CCL5", "CCL4",
+                               "CXCR4", "LMNA", "CD27", "ZNF331", "ZNF683", "XCL1", "KLRB1", "NKG7", "GNLY",
+                               "PRF1", "IFNG", "TIGIT", "PDCD1", "LAG3", "IFIT3", "OASL")) + 
+  RotatedAxis() + 
+  xlab(NULL) + ylab(NULL) + 
+  scale_color_distiller(palette = "Reds", direction = 1)
+
+StackedVlnPlot(finalCD8, features = c("CD8B", "SELL", "LEF1", "CD69", "IL7R", "GZMK", "GZMB", "GZMA", "HLA-DRA", "CCL5", "CCL4", 
+                                      "CXCR4", "LMNA", "CD27", "ZNF331", "ZNF683", "XCL1", "KLRB1", "NKG7", "GNLY", 
+                                      "PRF1", "IFNG", "TIGIT", "PDCD1", "LAG3", "IFIT3", "OASL"), cols = cd8cols)
+
+#giving idents to clusters
+Idents(finalCD8) <- finalCD8$seurat_clusters
+current.cluster.ids <- levels(finalCD8$seurat_clusters)
+new.cluster.ids <- c("GZMK/B+ memory", "Naive", "GZMK+ memory", "GZMB+ TEMRA", "ITGB1+ memory", "Trm-like", "MT-high", "Proliferating", "ISG-high")
+finalCD8@active.ident <- plyr::mapvalues(x = finalCD8@active.ident, from = current.cluster.ids, to = new.cluster.ids)
+finalCD8$clusters_names <- finalCD8@active.ident
+
+finalCD8$clusters_names <- factor(finalCD8$clusters_names, levels = c("Naive", "ITGB1+ memory", "GZMK+ memory", "GZMK/B+ memory", "GZMB+ TEMRA", "Trm-like", "ISG-high", "Proliferating", "MT-high"))
+Idents(finalCD8) <- finalCD8$clusters_names
+
+CD8Tcell_markers <- FindAllMarkers(object=finalCD8, only.pos = FALSE, logfc.threshold = 0.50, min.pct = 0.40)
+write.csv(CD8Tcell_markers, "finalcd8tcellclustermarkers_res0.8.csv")
+
+DimPlot(finalCD8, group.by = "clusters_names") + 
+  scale_color_manual(values = cd8cols, name = "CD8+ T Cell Clusters") +
+  ggtitle(NULL) + xlab("UMAP 1") + ylab("UMAP 2") +
+  theme(legend.text = element_text(size=10),
+        legend.title = element_text(size=10, face="bold"))
+ggsave("CD8_UMAP_namedclusters.eps", width = 5, height = 3.5)
+
+DotPlot(finalCD8, features = rev(c("CD8B", "SELL", "LEF1", "CD69", "IL7R", "GZMK", "GZMB", "GZMA", "HLA-DRA", "CCL5", "CCL4", 
+                                   "CXCR4", "LMNA", "CD27", "ZNF331", "ZNF683", "XCL1", "KLRB1", "NKG7", "GNLY", 
+                                   "PRF1", "IFNG", "TIGIT", "PDCD1", "LAG3", "IFIT3", "MKI67", "MALAT1")), group.by = "clusters_names") + 
+  coord_flip() + 
+  RotatedAxis() + 
+  xlab(NULL) + ylab(NULL) + 
+  scale_color_distiller(palette = "Reds", direction = 1)
+ggsave("CD8_dotplot_markers_namedclusters.eps", width = 5.5, height = 7)
+
+
+StackedVlnPlot(finalCD8, features = c("CD8B", "SELL", "LEF1", "CD69", "IL7R", "GZMK", "GZMB", "GZMA", "HLA-DRA", "CCL5", "CCL4", 
+                                      "CXCR4", "LMNA", "CD27", "ZNF331", "ZNF683", "XCL1", "KLRB1", "NKG7", "GNLY", 
+                                      "PRF1", "IFNG", "TIGIT", "PDCD1", "LAG3", "IFIT3", "MKI67", "MALAT1"), cols = cd8cols)
+ggsave("CD8_stackedVln_markers_namedclusters.eps", width = 4, height = 6)
+
+#symphony- loading in main pipeline Phase 2 T cell data
+tcell_RNA <- readRDS("/Users/gdunlap/Desktop/Rao_Lab/AMP_Phase_2/data/mainPipeline/mRNA_counts_tcell_pass_QC.rds")
+tcell_ADT <- readRDS("/Users/gdunlap/Desktop/Rao_Lab/AMP_Phase_2/data/mainPipeline/protein_counts_tcell_pass_QC.rds")
+tcell_meta <- readRDS("/Users/gdunlap/Desktop/Rao_Lab/AMP_Phase_2/data/mainPipeline/meta_tcell_pass_QC.rds")
+rownames(tcell_meta) <- tcell_meta$cell
+
+AMP_phase2main_T <- CreateSeuratObject(tcell_RNA)
+AMP_phase2main_T[["ADT"]] <- CreateAssayObject(tcell_ADT)
+
+AMP_phase2main_T <- AddMetaData(AMP_phase2main_T, tcell_meta)
+Idents(AMP_phase2main_T) <- AMP_phase2main_T$new_cluster_number
+
+AMP_phase2main_T_cd8 <- subset(AMP_phase2main_T, idents = c(0,1,10,11,12,2,20,21,22,23,3,4,5,6,7,8,9), invert = T)
+
+AMP_phase2main_T_cd8 <- NormalizeData(AMP_phase2main_T_cd8, normalization.method = "LogNormalize", scale.factor = 10000)
+
+AMP_phase2main_T_cd8$new_cluster_name <- factor(AMP_phase2main_T_cd8$new_cluster_name, levels = c("T-16: CD8+ CD45ROlow/naive", "T-14: CD8+ GZMK+ memory", "T-13: CD8+ GZMK/B+ memory", "T-15: CD8+ GZMB+ TEMRA", "T-17: CD8+ activated/NK-like", "T-18: Proliferating", "T-19: MT-high (low quality)"))
+Idents(AMP_phase2main_T_cd8) <- AMP_phase2main_T_cd8$new_cluster_name
+
+#Symphony on repertoire T cell data
+symphT_reference <- symphony::buildReference(
+  AMP_phase2main_T_cd8@assays$RNA@data,
+  AMP_phase2main_T_cd8@meta.data,
+  vars = c('sample'),         # variables to integrate over
+  K = 100,                   # number of Harmony clusters
+  verbose = TRUE,            # verbose output
+  do_umap = FALSE,            # can set to FALSE if want to run umap separately later
+  do_normalize = FALSE,      # set to TRUE if input counts are not normalized yet
+  vargenes_method = 'vst',   # method for variable gene selection ('vst' or 'mvp')
+  #vargenes_groups = 'new_cluster_name', # metadata column specifying groups for variable gene selection 
+  topn = 2000,               # number of variable genes to choose per group
+  d = 20                     # number of PCs
+)
+
+queryT <- mapQuery(finalCD8@assays$RNA@data,             # query gene expression (genes x cells)
+                   finalCD8@meta.data,        # query metadata (cells x attributes)
+                   symphT_reference,             # Symphony reference object
+                   vars = NULL,           # Query batch variables to harmonize over (NULL treats query as one batch)
+                   do_normalize = FALSE,  # perform log(CP10k) normalization on query (set to FALSE if already normalized)
+                   do_umap = FALSE)        # project query cells into reference UMAP
+
+queryT <- knnPredict(queryT, symphT_reference, train_labels = symphT_reference$meta_data$new_cluster_name,
+                     k = 10, save_as = 'cell_type_10_nn', confidence = TRUE)
+
+finalCD8$symphony_narrow_type <- queryT$meta_data$cell_type_10_nn
+
+## Cell type mappings heatmap
+query_immune = queryT$meta_data
+query_immune$symphony_narrow_type = droplevels(as.factor(query_immune$cell_type_10_nn))
+res_immune = symphony:::evaluate(query_immune$clusters_names, query_immune$cell_type_10_nn)
+Conf_immune = res_immune$Conf / rowSums(res_immune$Conf)
+
+dev.off()
+setEPS(width = 6.5, height = 7.5)
+postscript("CD8_symphony_mainPipeline.eps")
+pheatmap::pheatmap(Conf_immune, cluster_rows = F, cluster_cols = F, angle_col = c("45"), cellwidth = 20, cellheight = 20, color=colorRampPalette(c("white", "#962f23", "#5e0e04"))(1000), border_color = "white")
+dev.off()
+
+#oh et al data symphony
+oh_cd8 <- read.csv("~/Downloads/GSE149652_CD8_TIL_droplet_count_matrice.csv")
+rownames(oh_cd8) <- oh_cd8$index
+oh_cd8$index <- NULL
+
+oh_cd8_meta <- read.csv("~/Downloads/GSE149652_CD8_TIL_droplet_cellinfo_matrice.csv")
+oh_cd8_meta$index <-  gsub("-", ".", oh_cd8_meta$index, fixed = TRUE)
+rownames(oh_cd8_meta) <- oh_cd8_meta$index
+
+oh_cd8_seurat <- CreateSeuratObject(oh_cd8)
+oh_cd8_seurat <- AddMetaData(oh_cd8_seurat, oh_cd8_meta)
+
+Idents(oh_cd8_seurat) <- oh_cd8_seurat$cell_types
+oh_cd8_seurat <- subset(oh_cd8_seurat, idents = "CD8MAIT", invert = T)
+
+#Symphony on repertoire T cell data
+symphT_reference <- symphony::buildReference(
+  oh_cd8_seurat@assays$RNA@data,
+  oh_cd8_seurat@meta.data,
+  vars = c('Sample_ID'),         # variables to integrate over
+  K = 100,                   # number of Harmony clusters
+  verbose = TRUE,            # verbose output
+  do_umap = FALSE,            # can set to FALSE if want to run umap separately later
+  do_normalize = FALSE,      # set to TRUE if input counts are not normalized yet
+  vargenes_method = 'vst',   # method for variable gene selection ('vst' or 'mvp')
+  #vargenes_groups = 'new_cluster_name', # metadata column specifying groups for variable gene selection 
+  topn = 2000,               # number of variable genes to choose per group
+  d = 20                     # number of PCs
+)
+
+queryT <- mapQuery(finalCD8@assays$RNA@data,             # query gene expression (genes x cells)
+                   finalCD8@meta.data,        # query metadata (cells x attributes)
+                   symphT_reference,             # Symphony reference object
+                   vars = NULL,           # Query batch variables to harmonize over (NULL treats query as one batch)
+                   do_normalize = FALSE,  # perform log(CP10k) normalization on query (set to FALSE if already normalized)
+                   do_umap = FALSE)        # project query cells into reference UMAP
+
+queryT <- knnPredict(queryT, symphT_reference, train_labels = symphT_reference$meta_data$cell_types,
+                     k = 10, save_as = 'cell_type_10_nn', confidence = TRUE)
+
+finalCD8$symphony_narrow_type <- queryT$meta_data$cell_type_10_nn
+
+query_immune = queryT$meta_data
+query_immune$symphony_narrow_type = droplevels(as.factor(query_immune$cell_type_10_nn))
+res_immune = symphony:::evaluate(query_immune$clusters_names, query_immune$cell_type_10_nn)
+Conf_immune = res_immune$Conf / rowSums(res_immune$Conf)
+
+
+#pseudobulk heatmap
+col_cor = colorRamp2(c(1, 0), c("#5e0e04", "white"))
+pseudobulk_byCD8cluster <- AverageExpression(finalCD8, group.by = "clusters_names")
+cor.exp <- cor(pseudobulk_byCD8cluster$RNA)
+Heatmap(as.matrix(cor.exp), col = col_cor)
+
+#gene signatures
+cd8signatures <- read.csv("~/Desktop/Rao_Lab/AMP_Phase_2/manuscript/cd8_signatures.csv")
+mito.genes <- grep(pattern = "^MT-", x = rownames(x = finalCD8@assays$RNA@data), value = TRUE)
+
+finalCD8 <- AddModuleScore(finalCD8, list(cd8signatures$Naive), name = "Naive_sig", ctrl = 1000)
+finalCD8 <- AddModuleScore(finalCD8, list(cd8signatures$TCR), name = "TCR_sig", ctrl = 1000)
+finalCD8 <- AddModuleScore(finalCD8, list(cd8signatures$Activation), name = "Activation_sig", ctrl = 1000)
+finalCD8 <- AddModuleScore(finalCD8, list(cd8signatures$Effectorness), name = "Effector_sig", ctrl = 1000)
+finalCD8 <- AddModuleScore(finalCD8, list(cd8signatures$Cytotoxicity), name = "Cytotoxicity_sig", ctrl = 1000)
+finalCD8 <- AddModuleScore(finalCD8, list(cd8signatures$ISG), name = "ISG_sig", ctrl = 1000)
+finalCD8 <- AddModuleScore(finalCD8, list(cd8signatures$Proliferation), name = "Proliferation_sig", ctrl = 1000)
+finalCD8 <- AddModuleScore(finalCD8, list(cd8signatures$Stemness), name = "Stemness_sig", ctrl = 1000)
+finalCD8 <- AddModuleScore(finalCD8, list(cd8signatures$Exhaustion), name = "Exhaustion_sig", ctrl = 1000)
+finalCD8 <- AddModuleScore(finalCD8, list(cd8signatures$Trm), name = "Trm_sig", ctrl = 1000)
+finalCD8 <- AddModuleScore(finalCD8, list(mito.genes), name = "Mitochondrial_sig", ctrl = 1000)
+
+cd8signatures_cluster <- finalCD8@meta.data %>% 
+  group_by(clusters_names) %>% 
+  summarise_all(mean) %>% 
+  select(clusters_names, Naive_sig1:Mitochondrial_sig1)
+
+names(cd8signatures_cluster) <- c("clusters_names", "Naive", "TCR", "Activation", "Effector", "Cytotoxicity", "ISG", "Proliferation", "Stemness", "Exhaustion", "Trm", "Mito")
+
+cd8signatures_cluster$clusters_names <- NULL
+cd8signatures_cluster <- as.matrix(cd8signatures_cluster)
+rownames(cd8signatures_cluster) <- levels(finalCD8$clusters_names)
+cd8signatures_cluster <- scale(cd8signatures_cluster)
+
+col_fun = colorRamp2(c(2, 0, -2), c("#5e0e04", "white", "lightgrey"))
+col_fun(seq(-3, 3))
+
+cd8sigheatmap <- Heatmap(t(cd8signatures_cluster), cluster_columns = F, cluster_rows = F, col = col_fun,
+                         heatmap_legend_param = list(title = NULL), column_names_rot = 45, column_names_centered = F, column_names_gp = gpar(fontsize = 9), row_names_gp = gpar(fontsize = 9),
+                         row_order = c("Naive", "TCR", "Activation", "Trm", "Effector", "Cytotoxicity", "Stemness", "Exhaustion", "ISG", "Proliferation", "Mito"),
+                         width = ncol(cd8signatures_cluster)*unit(4.8, "mm"), 
+                         height = nrow(cd8signatures_cluster)*unit(6.5, "mm"), rect_gp = gpar(col = "white", lwd = 0.5))
+
+setEPS()
+postscript("cd8_heatmap_signatures_byCluster.eps", width = 6, height = 5)
+draw(cd8sigheatmap)
+dev.off()
+
+#heatmap::pheatmap(t(signatures_cluster), scale = "row", cluster_rows = F, cluster_cols = F, angle_col = c("45"), cellwidth = 20, cellheight = 20, color=colorRampPalette(c("lightgrey","white", "#7D190E"))(1000))
+
+a <- FeaturePlot(finalCD8, features = c("Naive_sig1"), order = T) + ggtitle("Naive") +
+  scale_color_gradientn(colors = rev(c("#5e0e04", "white", "lightgrey"))) +
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+b <- FeaturePlot(finalCD8, features = c("TCR_sig1"), order = T) + ggtitle("TCR Signaling") +
+  scale_color_gradientn(colors = rev(c("#5e0e04", "white", "lightgrey"))) +
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+c <- FeaturePlot(finalCD8, features = c("Activation_sig1"), order = T) + ggtitle("Activation") +
+  scale_color_gradientn(colors = rev(c("#5e0e04", "white", "lightgrey"))) +
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+d <- FeaturePlot(finalCD8, features = c("Trm_sig1"), order = T) + ggtitle("Trm") +
+  scale_color_gradientn(colors = rev(c("#5e0e04", "white", "lightgrey"))) +
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+e <- FeaturePlot(finalCD8, features = c("Effector_sig1"), order = T) + ggtitle("Effector") +
+  scale_color_gradientn(colors = rev(c("#5e0e04", "white", "lightgrey"))) +
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+f <- FeaturePlot(finalCD8, features = c("Cytotoxicity_sig1"), order = T) + ggtitle("Cytotoxicity") +
+  scale_color_gradientn(colors = rev(c("#5e0e04", "white", "lightgrey"))) +
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+g <- FeaturePlot(finalCD8, features = c("Stemness_sig1"), order = T) + ggtitle("Stemness") +
+  scale_color_gradientn(colors = rev(c("#5e0e04", "white", "lightgrey"))) +
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+h <- FeaturePlot(finalCD8, features = c("Exhaustion_sig1"), order = T) + ggtitle("Exhaustion") +
+  scale_color_gradientn(colors = rev(c("#5e0e04", "white", "lightgrey"))) +
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+  
+  
+i <- FeaturePlot(finalCD8, features = c("ISG_sig1"), order = T) + ggtitle("ISG") +
+  scale_color_gradientn(colors = rev(c("#5e0e04", "white", "lightgrey"))) +
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+j <- FeaturePlot(finalCD8, features = c("Proliferation_sig1"), order = T) + ggtitle("Proliferation") +
+  scale_color_gradientn(colors = rev(c("#5e0e04", "white", "lightgrey"))) +
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+k <- FeaturePlot(finalCD8, features = c("Mitochondrial_sig1"), order = T) + ggtitle("Mitochondrial") +
+  scale_color_gradientn(colors = rev(c("#5e0e04", "white", "lightgrey"))) +
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+(a | b | c | d) / (e | f | g | h) / (i | j | k | k)
+ggsave("cd8_umap_signatures.png", width = 6.3, height = 6)
+
+cd8sig_legend <- FeaturePlot(finalCD8, features = c("Mitochondrial_sig1"), order = T) + ggtitle("Mitochondrial") +
+  scale_color_gradientn(colors = rev(c("#5e0e04", "white", "lightgrey")), labels = c("Min", "Max"), breaks = c(-0.5,4.2))    
+
+plot_grid(get_legend(cd8sig_legend))
+ggsave("cd8_signatures_genericLegend.eps")
+
+#synovial vs blood skewing
+cd8metadata <- finalCD8@meta.data
+
+cd8clusterbytissue <- cd8metadata %>% 
+  group_by(clusters_names, sampleTissue_Pub) %>% 
+  add_tally(name = "patientcd8clustersize") %>% 
+  ungroup() %>%
+  select(sample_ID_Pub, tissue_source, clusters_names, totalcellCount, tcellCount, cd8tcellCount, patientcd8clustersize) %>%
+  distinct(sample_ID_Pub, tissue_source, clusters_names, .keep_all = T) %>%
+  mutate(freqcd8 = patientcd8clustersize / cd8tcellCount) %>%
+  mutate(freqT = patientcd8clustersize / tcellCount) 
+
+cd8clusterbytissue$clusters_names <- factor(cd8clusterbytissue$clusters_names, levels(finalCD8$clusters_names))
+
+#by cd8 T cells
+stat.test_freqcd8 <- cd8clusterbytissue %>%
+  group_by(clusters_names) %>%
+  pairwise_t_test(freqcd8 ~ tissue_source) %>%
+  add_significance()
+
+stat.test_freqcd8 <- stat.test_freqcd8 %>% add_xy_position(x = "tissue_source")
+
+ggplot(cd8clusterbytissue, aes(x = tissue_source, y = freqcd8)) +
+  geom_line(aes(group = sample_ID_Pub)) +
+  geom_point(aes(color = tissue_source)) + facet_wrap(~ clusters_names) + theme_classic() +
+  scale_color_manual(values = c("#f2a21e", "#88a0c4")) + theme(legend.position = "none") + xlab(NULL) +
+  ylab("Frequency of CD8 subcluster in all CD8 cells, per patient") + stat_pvalue_manual(stat.test_freqcd8, label = "p.adj")
+ggsave("CD8_clusterfrequencyCD8denom_byTissue.eps", width = 6, height = 5)
+
+#by all T cells
+stat.test_freqallT <- cd8clusterbytissue %>%
+  group_by(clusters_names) %>%
+  pairwise_t_test(freqT ~ tissue_source) %>%
+  add_significance()
+
+stat.test_freqallT <- stat.test_freqallT %>% add_xy_position(x = "tissue_source")
+
+ggplot(cd8clusterbytissue, aes(x = tissue_source, y = freqT)) +
+  geom_line(aes(group = sample_ID_Pub)) +
+  geom_point(aes(color = tissue_source)) + facet_wrap(~ clusters_names) + theme_classic() +
+  scale_color_manual(values = c("#f2a21e", "#88a0c4")) + theme(legend.position = "none") + xlab(NULL) +
+  ylab("Frequency of CD8 subcluster in all T cells, per patient") + stat_pvalue_manual(stat.test_freqallT, label = "p.adj")
+ggsave("CD8_clusterfrequencyTcelldenom_byTissue.eps", width = 6, height = 5)
+
+DimPlot(finalCD8, group.by = "tissue_source", shuffle = T) +
+  scale_color_manual(values = c("#f2a21e", "#88a0c4"), name = NULL, labels = c("SYN", "PBL")) +
+  ggtitle(NULL) + xlab("UMAP 1") + ylab("UMAP 2") + 
+  theme(legend.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank())
+ggsave("CD8_UMAP_byTissue.eps", width = 4, height = 3)
+
+
+Idents(finalCD8) <- finalCD8$tissue_source
+DimPlot(finalCD8, cells.highlight = WhichCells(finalCD8, idents = "SYN"), 
+        cols.highlight = c("#f2a21e"), sizes.highlight = 0.1, cols = "gray80") +
+  ggtitle("SYN") + xlab("UMAP 1") + ylab("UMAP 2") + 
+  theme(legend.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5, size = 11))
+ggsave("CD8_UMAP_SYN_highlight.eps", width = 3, height = 3)
+
+DimPlot(finalCD8, cells.highlight = WhichCells(finalCD8, idents = "PBL"), 
+        cols.highlight = c("#88a0c4"), sizes.highlight = 0.1, cols = "gray80") +
+  ggtitle("PBL") + xlab("UMAP 1") + ylab("UMAP 2") + 
+  theme(legend.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5, size = 11))
+ggsave("CD8_UMAP_PBL_highlight.eps", width = 3, height = 3)
+
+
+finalCD8$tissue_cluster <- paste0(finalCD8$tissue_source, "_", finalCD8$clusters_names)
+Idents(finalCD8) <- finalCD8$tissue_cluster
+
+DimPlot(finalCD8, cells.highlight = list(WhichCells(finalCD8, idents = "SYN_Naive"), 
+                                         WhichCells(finalCD8, idents = "SYN_ITGB1+ memory"), 
+                                         WhichCells(finalCD8, idents = "SYN_GZMK+ memory"), 
+                                         WhichCells(finalCD8, idents = "SYN_GZMK/B+ memory"), 
+                                         WhichCells(finalCD8, idents = "SYN_GZMB+ TEMRA"), 
+                                         WhichCells(finalCD8, idents = "SYN_Trm-like"), 
+                                         WhichCells(finalCD8, idents = "SYN_ISG-high"), 
+                                         WhichCells(finalCD8, idents = "SYN_Proliferating"), 
+                                         WhichCells(finalCD8, idents = "SYN_MT-high")), 
+        cols.highlight = rev(cd8cols), sizes.highlight = 0.05, cols = "gray80") +
+  scale_color_manual(breaks = c("Group_1", "Group_2", "Group_3", "Group_4", "Group_5", "Group_6", "Group_7", "Group_8", "Group_9", "Unselected"), 
+                     labels = c("SYN_Naive", "SYN_ITGB1+ memory", "SYN_GZMK+ memory", "SYN_GZMK/B+ memory", "SYN_GZMB+ TEMRA", "SYN_Trm-like", "SYN_ISG-high", "SYN_Proliferating", "SYN_MT-high", "Unselected"), 
+                     values = c(cd8cols[1:9], "gray90")) +
+  ggtitle("SYN") + xlab("UMAP 1") + ylab("UMAP 2") + 
+  theme(legend.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5, size = 11))
+ggsave("CD8_UMAP_SYN_highlight_clusters.eps", width = 2.8, height = 3)
+
+
+DimPlot(finalCD8, cells.highlight = list(WhichCells(finalCD8, idents = "PBL_Naive"), 
+                                         WhichCells(finalCD8, idents = "PBL_ITGB1+ memory"), 
+                                         WhichCells(finalCD8, idents = "PBL_GZMK+ memory"), 
+                                         WhichCells(finalCD8, idents = "PBL_GZMK/B+ memory"), 
+                                         WhichCells(finalCD8, idents = "PBL_GZMB+ TEMRA"), 
+                                         WhichCells(finalCD8, idents = "PBL_Trm-like"), 
+                                         WhichCells(finalCD8, idents = "PBL_ISG-high"), 
+                                         WhichCells(finalCD8, idents = "PBL_Proliferating"), 
+                                         WhichCells(finalCD8, idents = "PBL_MT-high")), 
+        cols.highlight = rev(cd8cols), sizes.highlight = 0.05, cols = "gray80") +
+  scale_color_manual(breaks = c("Group_1", "Group_2", "Group_3", "Group_4", "Group_5", "Group_6", "Group_7", "Group_8", "Group_9", "Unselected"), 
+                     labels = c("PBL_Naive", "PBL_ITGB1+ memory", "PBL_GZMK+ memory", "PBL_GZMK/B+ memory", "PBL_GZMB+ TEMRA", "PBL_Trm-like", "PBL_ISG-high", "PBL_Proliferating", "PBL_MT-high", "Unselected"), 
+                     values = c(cd8cols[1:9], "gray90")) +
+  ggtitle("PBL") + xlab("UMAP 1") + ylab("UMAP 2") + 
+  theme(legend.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5, size = 11))
+ggsave("CD8_UMAP_PBL_highlight_clusters.eps", width = 2.8, height = 3)
+
+#cluster breakdown per patient
+finalCD8@meta.data %>%
+  group_by(clusters_names, sampleTissue_Pub) %>%
+  dplyr::count() %>%
+  group_by(sampleTissue_Pub) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=sampleTissue_Pub,y=Percent, fill=clusters_names)) +
+  geom_col() +
+  scale_fill_manual(values = cd8cols, name = "Cluster") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  ylab(NULL) +
+  xlab(NULL) + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm')) 
+ggsave("CD8_barplot_patientSampleBreakdown_percent.eps", width = 6, height = 3)
+
+finalCD8@meta.data %>%
+  group_by(clusters_names, sampleTissue_Pub) %>%
+  dplyr::count() %>%
+  group_by(sampleTissue_Pub) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=sampleTissue_Pub,y=n, fill=clusters_names)) +
+  geom_col() +
+  scale_fill_manual(values = cd8cols, name = "Cluster") +
+  ggtitle(NULL) +
+  ylab("Number of Cells") +
+  xlab(NULL) + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+        axis.title.y = element_text(size = 10),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm')) 
+ggsave("CD8_barplot_patientSampleBreakdown_number.eps", width = 6.1, height = 3)
+
+cd8_p2 <- finalCD8@meta.data %>%
+  group_by(clusters_names, tissue_source) %>%
+  dplyr::count() %>%
+  group_by(clusters_names) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=clusters_names,y=Percent, fill=tissue_source)) +
+  geom_col() +
+  scale_fill_manual(values = c("#f2a21e", "#88a0c4"), name = "Source", labels = c("SYN" ,"PBL")) +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  labs(fill = "Sample") +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm')) 
+
+cd8_p1 <- finalCD8@meta.data %>%
+  group_by(clusters_names, sort_group) %>%
+  dplyr::count() %>%
+  group_by(clusters_names) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=clusters_names,y=n, fill = clusters_names)) +
+  geom_col() +
+  scale_fill_manual(name = NULL, values = cd8cols) +
+  scale_y_continuous(limits = c(0,4500)) +
+  ggtitle(NULL) +
+  labs(fill = "Sample") +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10)) 
+
+#clonality by cluster
+cd8_p3 <- finalCD8@meta.data %>%
+  group_by(clusters_names, cloneType) %>%
+  dplyr::count() %>%
+  group_by(clusters_names) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=clusters_names,y=Percent, fill=cloneType)) +
+  geom_col() +
+  scale_fill_brewer(palette = "Blues", direction = -1, name = "Clone Type") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  ylab(NULL) +
+  xlab(NULL) + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm')) 
+
+cd8plotalign <- align_plots(cd8_p1, cd8_p2, cd8_p3, align="hv", axis="tblr")
+cd8_p1x <- ggdraw(cd8plotalign[[1]])
+cd8_p2x <- ggdraw(cd8plotalign[[2]])
+cd8_p3x <- ggdraw(cd8plotalign[[3]])
+
+save_plot("CD8_barplot_numberCells_aligned.eps", cd8_p1x, base_width = 6, base_height = 2)
+save_plot("CD8_barplot_TissueDist_aligned.eps", cd8_p2x, base_width = 6, base_height = 2)
+save_plot("CD8_barplot_clonality_aligned.eps", cd8_p3x, base_width = 6, base_height = 2)
+
+DimPlot(finalCD8, group.by = "cloneType") + 
+  scale_color_brewer(palette = "Blues", direction = -1) +
+  ggtitle(NULL) + xlab("UMAP 1") + ylab("UMAP 2") +
+  theme(legend.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank())
+ggsave("CD8_UMAP_clonality.eps", width = 6, height = 3)
+
+#plotting top 50 synovial clones
+top50syn <- finalCD8@meta.data %>% filter(tissue_source == "SYN") %>%
+  group_by(sample_ID_Pub, CTaa) %>%
+  add_tally() %>% na.omit(CTaa) %>% distinct(sample_ID_Pub, CTaa, .keep_all = T) %>% ungroup() %>%
+  arrange(desc(n)) %>% dplyr::slice(1:50) %>% select(CTaa, sample_ID_Pub, n) %>%
+  mutate(sample_clone = paste0(sample_ID_Pub, "-", CTaa))
+
+top50synbycluster <- finalCD8@meta.data %>% filter(tissue_source == "SYN") %>%
+  mutate(sample_clone = paste0(sample_ID_Pub, "-", CTaa)) %>%
+  filter(sample_clone %in% top50syn$sample_clone) %>% group_by(sample_clone, clusters_names) %>% dplyr::count() 
+
+top50synbycluster$sample_clone <- factor(top50synbycluster$sample_clone, levels = c(top50syn$sample_clone))
+
+top50synplot <- top50synbycluster %>%
+  ggplot(aes(x = sample_clone, y = n, fill = clusters_names)) + geom_col() +
+  scale_fill_manual(name = NULL, values = cd8cols, drop = FALSE) +
+  scale_x_discrete(labels = substr(top50syn$sample_clone, 1, 4)) +
+  theme_classic() + RotatedAxis() +
+  ylab("Cells in Clone") + xlab("Top 50 Synovial Clones") +
+  theme(axis.text.x = element_text(size = 8, angle = 45, hjust = 1),
+        axis.title = element_text(size = 9),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm')) 
+
+top50synplot_noaxis <- top50synbycluster %>%
+  ggplot(aes(x = sample_clone, y = n, fill = clusters_names)) + geom_col() +
+  scale_fill_manual(name = NULL, values = cd8cols, drop = FALSE) +
+  scale_x_discrete(labels = substr(top50syn$sample_clone, 1, 4)) +
+  theme_classic() + RotatedAxis() +
+  ylab("Cells in Clone") + xlab("Top 50 Synovial Clones") +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title = element_text(size = 9),
+        legend.position = "none") 
+
+#plotting top 50 blood clones
+top50pbl <- finalCD8@meta.data %>% filter(tissue_source == "PBL") %>%
+  group_by(sample_ID_Pub, CTaa) %>%
+  add_tally() %>% na.omit(CTaa) %>% distinct(sample_ID_Pub, CTaa, .keep_all = T) %>% ungroup() %>%
+  arrange(desc(n)) %>% dplyr::slice(1:50) %>% select(CTaa, sample_ID_Pub, n) %>%
+  mutate(sample_clone = paste0(sample_ID_Pub, "-", CTaa))
+
+top50pblbycluster <- finalCD8@meta.data %>% filter(tissue_source == "PBL") %>%
+  mutate(sample_clone = paste0(sample_ID_Pub, "-", CTaa)) %>%
+  filter(sample_clone %in% top50pbl$sample_clone) %>% group_by(sample_clone, clusters_names) %>% dplyr::count() 
+
+top50pblbycluster$sample_clone <- factor(top50pblbycluster$sample_clone, levels = c(top50pbl$sample_clone))
+
+top50pblplot <- top50pblbycluster %>%
+  ggplot(aes(x = sample_clone, y = n, fill = clusters_names)) + geom_col() +
+  scale_fill_manual(name = NULL, values = cd8cols, drop = FALSE) +
+  scale_x_discrete(labels = substr(top50pbl$sample_clone, 1, 4)) +
+  theme_classic() + RotatedAxis() +
+  ylab("Cells in Clone") + xlab("Top 50 Blood Clones") +
+  theme(axis.text.x = element_text(size = 8, angle = 45, hjust = 1),
+        axis.title = element_text(size = 9),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm')) 
+
+top50pblplot_noaxis <- top50pblbycluster %>%
+  ggplot(aes(x = sample_clone, y = n, fill = clusters_names)) + geom_col() +
+  scale_fill_manual(name = NULL, values = cd8cols, drop = FALSE) +
+  scale_x_discrete(labels = substr(top50pbl$sample_clone, 1, 4)) +
+  theme_classic() + RotatedAxis() +
+  ylab("Cells in Clone") + xlab("Top 50 Blood Clones") +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title = element_text(size = 9),
+        legend.position = "none") 
+
+top50synplot / top50pblplot
+ggsave("CD8_top50clones_tissuesplit_clusterCols.eps", width = 9, height = 4)
+
+top50synplot_noaxis | top50pblplot_noaxis
+ggsave("CD8_top50clones_tissuesplit_clusterCols_noXaxis_sidebyside.eps", width = 8, height = 2)
+
+top50synplot_noaxis / top50pblplot_noaxis
+ggsave("CD8_top50clones_tissuesplit_clusterCols_noXaxis_topbottom.eps", width = 4, height = 4)
+
+#clonal sharing all
+finalCD8$clusters_names_tissue <- paste0(finalCD8$tissue_source, "_", finalCD8$clusters_names)
+finalcd8_tcrbycluster <- expression2List(finalCD8, group = "clusters_names_tissue")
+clonalOverlap(finalcd8_tcrbycluster, cloneCall = "aa", method = "morisita") +
+  scale_fill_distiller(palette = "Reds", direction = 1, na.value = "white", name = "Morisita \nOverlap") + theme(axis.text.x = element_text(angle = 45, hjust = 1),
+                                                                                                                 legend.text = element_text(size=9),
+                                                                                                                 legend.title = element_text(size = 10),
+                                                                                                                 legend.key.size = unit(0.35, 'cm'),
+                                                                                                                 text = element_text(size=10))
+
+finalcd8_morisita <- clonalOverlap(finalcd8_tcrbycluster, cloneCall = "aa", method = "morisita", exportTable = T)
+finalcd8_morisita$names <- NULL
+finalcd8_morisita <- as.matrix(finalcd8_morisita)
+finalcd8_morisita <- Matrix::forceSymmetric(finalcd8_morisita,uplo="U")
+finalcd8_morisita <- as.matrix(finalcd8_morisita)
+finalcd8_morisita <- finalcd8_morisita[c(10:18),c(1:9)]
+finalcd8_morisita <- finalcd8_morisita[c(7,5,3,2,1,9,4,8,6),c(1:9)]
+finalcd8_morisita <- finalcd8_morisita[c(1:9), c(7,5,3,2,1,9,4,8,6)]
+cd8Overlapheatmap <- Heatmap(finalcd8_morisita, cluster_columns = F, cluster_rows = F, 
+                                col = colorRampPalette(c("white", "grey50"))(1000),
+                                heatmap_legend_param = list(title = "Morisita \nOverlap"), row_labels = levels(finalCD8$clusters_names), column_labels = levels(finalCD8$clusters_names),
+                                column_names_rot = 45, column_names_centered = F, column_names_gp = gpar(fontsize = 8), row_names_gp = gpar(fontsize = 8),
+                                width = ncol(cd8signatures_cluster)*unit(6, "mm"), 
+                                height = nrow(cd8signatures_cluster)*unit(4, "mm"), 
+                                rect_gp = gpar(col = "white", lwd = 0.5))
+setEPS()
+postscript("cd8_all_heatmap_clonalOverlap_byCluster.eps", width = 7, height = 5)
+draw(cd8Overlapheatmap)
+dev.off()
+
+#clonal sharing by tissue
+finalCD8_SYN <- subset(finalCD8, subset = tissue_source  == "SYN")
+finalcd8syn_tcrbycluster <- expression2List(finalCD8_SYN, group = "clusters_names")
+clonalOverlap(finalcd8syn_tcrbycluster, cloneCall = "aa", method = "morisita") +
+  scale_fill_distiller(palette = "Reds", direction = 1, na.value = "white", name = "Morisita \nOverlap") + theme(axis.text.x = element_text(angle = 45, hjust = 1),
+                                                                                                                 legend.text = element_text(size=9),
+                                                                                                                 legend.title = element_text(size = 10),
+                                                                                                                 legend.key.size = unit(0.35, 'cm'),
+                                                                                                                 text = element_text(size=10))
+
+finalcd8syn_morisita <- clonalOverlap(finalcd8syn_tcrbycluster, cloneCall = "aa", method = "morisita", exportTable = T)
+finalcd8syn_morisita$names <- NULL
+finalcd8syn_morisita <- as.matrix(finalcd8syn_morisita)
+finalcd8syn_morisita <- Matrix::forceSymmetric(finalcd8syn_morisita,uplo="U")
+finalcd8syn_morisita <- as.matrix(finalcd8syn_morisita)
+cd8synOverlapheatmap <- Heatmap(finalcd8syn_morisita, cluster_columns = F, cluster_rows = F, 
+                                col = colorRampPalette(c("white", "#f2a21e"))(1000),
+                                heatmap_legend_param = list(title = "Tissue \nMorisita \nOverlap"), column_order = levels(finalCD8$clusters_names), row_order = levels(finalCD8$clusters_names),
+                                column_names_rot = 45, column_names_centered = F, column_names_gp = gpar(fontsize = 8), row_names_gp = gpar(fontsize = 8),
+                                width = ncol(cd8signatures_cluster)*unit(6, "mm"), 
+                                height = nrow(cd8signatures_cluster)*unit(4, "mm"), 
+                                rect_gp = gpar(col = "white", lwd = 0.5))
+
+setEPS()
+postscript("cd8_SYN_heatmap_clonalOverlap_byCluster.eps", width = 7, height = 5)
+draw(cd8synOverlapheatmap)
+dev.off()
+
+finalCD8_PBL <- subset(finalCD8, subset = tissue_source  == "PBL")
+finalcd8pbl_tcrbycluster <- expression2List(finalCD8_PBL, group = "clusters_names")
+clonalOverlap(finalcd8pbl_tcrbycluster, cloneCall = "aa", method = "morisita") +
+  scale_fill_distiller(palette = "Reds", direction = 1, na.value = "white", name = "Blood \nMorisita \nOverlap") + theme(axis.text.x = element_text(angle = 45, hjust = 1),
+                                                                                                                 legend.text = element_text(size=9),
+                                                                                                                 legend.title = element_text(size = 10),
+                                                                                                                 legend.key.size = unit(0.35, 'cm'),
+                                                                                                                 text = element_text(size=10))
+
+finalcd8pbl_morisita <- clonalOverlap(finalcd8pbl_tcrbycluster, cloneCall = "aa", method = "morisita", exportTable = T)
+finalcd8pbl_morisita$names <- NULL
+finalcd8pbl_morisita <- as.matrix(finalcd8pbl_morisita)
+finalcd8pbl_morisita <- Matrix::forceSymmetric(finalcd8pbl_morisita,uplo="U")
+finalcd8pbl_morisita <- as.matrix(finalcd8pbl_morisita)
+cd8pblOverlapheatmap <- Heatmap(finalcd8pbl_morisita, cluster_columns = F, cluster_rows = F, 
+                                col = colorRampPalette(c("white", "#88a0c4"))(1000),
+                                heatmap_legend_param = list(title = "Blood \nMorisita \nOverlap"), column_order = levels(finalCD8$clusters_names), row_order = levels(finalCD8$clusters_names),
+                                column_names_rot = 45, column_names_centered = F, column_names_gp = gpar(fontsize = 8), row_names_gp = gpar(fontsize = 8),
+                                width = ncol(cd8signatures_cluster)*unit(6, "mm"), 
+                                height = nrow(cd8signatures_cluster)*unit(4, "mm"), 
+                                rect_gp = gpar(col = "white", lwd = 0.5))
+
+setEPS()
+postscript("cd8_PBL_heatmap_clonalOverlap_byCluster.eps", width = 7, height = 5)
+draw(cd8pblOverlapheatmap)
+dev.off()
+
+
+
+CD8prolif <- subset(finalCD8, subset = clusters_names == "Proliferating")
+CD8_exceptprolif <- subset(finalCD8, subset = clusters_names == "Proliferating", invert = T)
+
+symphT_reference <- symphony::buildReference(
+  CD8_exceptprolif@assays$RNA@data,
+  CD8_exceptprolif@meta.data,
+  vars = c("sampleTissue_Pub"),         # variables to integrate over
+  K = 100,                   # number of Harmony clusters
+  verbose = TRUE,            # verbose output
+  do_umap = FALSE,            # can set to FALSE if want to run umap separately later
+  do_normalize = FALSE,      # set to TRUE if input counts are not normalized yet
+  vargenes_method = 'vst',   # method for variable gene selection ('vst' or 'mvp')
+  #vargenes_groups = 'clusters_names', # metadata column specifying groups for variable gene selection 
+  topn = 2000,               # number of variable genes to choose per group
+  d = 20                     # number of PCs
+)
+
+queryT <- mapQuery(CD8prolif$RNA@data,             # query gene expression (genes x cells)
+                   CD8prolif@meta.data,        # query metadata (cells x attributes)
+                   symphT_reference,             # Symphony reference object
+                   vars = NULL,           # Query batch variables to harmonize over (NULL treats query as one batch)
+                   do_normalize = FALSE,  # perform log(CP10k) normalization on query (set to FALSE if already normalized)
+                   do_umap = FALSE)        # project query cells into reference UMAP
+
+queryT <- knnPredict(queryT, symphT_reference, train_labels = symphT_reference$meta_data$clusters_names,
+                     k = 10, save_as = 'cell_type_10_nn', confidence = TRUE)
+
+CD8_cluster_breakdown_exceptprolif <- as.data.frame(table(CD8_exceptprolif$clusters_names))
+ggplot(CD8_cluster_breakdown_exceptprolif, aes(x = 2, y = Freq, fill = Var1)) +
+  geom_bar(stat = "identity", color = "white") +
+  coord_polar(theta = "y", start = 0) +
+  guides(fill = guide_legend(reverse = TRUE)) +
+  guides(fill=guide_legend(title=NULL)) +
+  scale_fill_manual(values = cd8cols) +
+  theme_void() +
+  xlim(0.5, 2.5) +
+  theme(legend.key.size = unit(0.35, 'cm'),
+        legend.text = element_text(size = 9))
+
+CD8_reClusterProlif_cluster_breakdown <- as.data.frame(table(queryT$meta_data$cell_type_10_nn))
+ggplot(CD8_reClusterProlif_cluster_breakdown, aes(x = 2, y = Freq, fill = Var1)) +
+  geom_bar(stat = "identity", color = "white") +
+  coord_polar(theta = "y", start = 0) +
+  guides(fill = guide_legend(reverse = TRUE)) +
+  guides(fill=guide_legend(title=NULL)) +
+  scale_fill_manual(values = cd8cols) +
+  theme_void() +
+  xlim(0.5, 2.5) +
+  theme(legend.key.size = unit(0.35, 'cm'),
+        legend.text = element_text(size = 9))  
+
+CD8_cluster_breakdown_exceptprolif <- as.data.frame(table(CD8_exceptprolif$clusters_names, CD8_exceptprolif$tissue_source))
+CD8_cluster_breakdown_exceptprolif %>% 
+  group_by(Var1, Var2) %>%
+  dplyr::count(Freq) %>%
+  group_by(Var2) %>%
+  mutate(Percent=100*Freq/sum(Freq)) %>% ungroup() %>%
+  ggplot(aes(x = 2, y = Percent, fill = Var1)) +
+  geom_bar(stat = "identity", color = "white") + facet_wrap(~Var2) +
+  coord_polar(theta = "y", start = 0) +
+  guides(fill = guide_legend(reverse = TRUE)) +
+  guides(fill=guide_legend(title=NULL)) +
+  scale_fill_manual(values = cd8cols) +
+  theme_void() +
+  xlim(0.5, 2.5) +
+  theme(legend.position = "none")  
+ggsave("CD8_clusterBreakdown_exceptProlif_tissueSplit.eps", width = 6, height = 2)
+
+CD8_reClusterProlif_cluster_breakdown <- as.data.frame(table(queryT$meta_data$cell_type_10_nn, queryT$meta_data$tissue_source))
+CD8_reClusterProlif_cluster_breakdown %>% 
+  group_by(Var1, Var2) %>%
+  dplyr::count(Freq) %>%
+  group_by(Var2) %>%
+  mutate(Percent=100*Freq/sum(Freq)) %>% ungroup() %>%
+  ggplot(aes(x = 2, y = Percent, fill = Var1)) +
+  geom_bar(stat = "identity", color = "white") + facet_wrap(~Var2) +
+  coord_polar(theta = "y", start = 0) +
+  guides(fill = guide_legend(reverse = TRUE)) +
+  guides(fill=guide_legend(title=NULL)) +
+  scale_fill_manual(values = cd8cols) +
+  theme_void() +
+  xlim(0.5, 2.5) +
+  theme(legend.position = "none")  
+ggsave("CD8_clusterBreakdown_prolifReMapped_tissueSplit.eps", width = 6, height = 2)
+
+#total numbers of prolif cells per tissue
+CD8_reClusterProlif_cluster_breakdown %>% 
+  group_by(Var1, Var2) %>%
+  dplyr::count(Freq) %>%
+  group_by(Var2) %>%
+  mutate(Percent=100*Freq/sum(Freq)) %>% mutate(sum(Freq))
+
+
+cd8metadata %>% 
+  filter(tissue_source == "SYN") %>% 
+  filter(clusters_names %in% c("GZMK/B+ memory")) %>%
+  group_by(CTaa, sample_ID_Pub) %>% 
+  add_tally() %>% 
+  filter(n > 2) %>%
+  mutate(meantcr = mean(Effector_sig1)) %>% 
+  mutate(meancyto = mean(Proliferation_sig1)) %>% 
+  distinct(CTaa, sample_ID_Pub, .keep_all = T) %>%
+  ggplot(aes(x = meancyto, y = meantcr, size = n)) + geom_point(alpha = 0.7) + theme_classic()
+
+cd8metadata %>% 
+  filter(clusters_names %in% c("GZMK/B+ memory", "GZMK+ memory", "GZMB+ TEMRA")) %>%
+  mutate(Ctaa_sample = paste0(CTaa, "_", sample_ID_Pub)) %>%
+  group_by(Ctaa_sample, clusters_names) %>% 
+  add_tally() %>% pivot_wider(names_from = clusters_names, values_from = c(n)) %>% 
+  mutate(`GZMB+ TEMRA` = coalesce(`GZMB+ TEMRA`, 0)) %>% 
+  mutate(`GZMK/B+ memory` = coalesce(`GZMK/B+ memory`, 0)) %>% 
+  mutate(`GZMK+ memory` = coalesce(`GZMK+ memory`, 0)) %>% 
+  mutate(KB = ifelse(`GZMK/B+ memory` > `GZMB+ TEMRA`, "GZMK", 
+                     ifelse(`GZMK/B+ memory` == `GZMB+ TEMRA`, "Equal", "GZMB"))) %>% 
+  add_tally() %>% 
+  filter(n > 2) %>%
+  mutate(meancyto = mean(Cytotoxicity_sig1)) %>% 
+  mutate(meaneff = mean(Effector_sig1)) %>% 
+  distinct(Ctaa_sample, .keep_all = T) %>%
+  ggplot(aes(x = meancyto, y = meaneff, size = n, col = KB)) + 
+  geom_point(alpha = 0.7) + theme_classic()
+
+#stop
+cd8metadata_count <- cd8metadata %>%
+  group_by(CTaa, sample_ID_Pub) %>% add_tally() %>% distinct(CTaa, sample_ID_Pub, .keep_all = T)
+
+write.csv(cd8metadata_count, "finalCD8_metadata_withClonecountbyDonor.csv")
+
+
+synmetadata <- finalCD8@meta.data %>% 
+  filter(tissue_source == "SYN")
+write.csv(synmetadata, file = "CD8metadata_synovial.csv")
+
+finalCD8$patientCTaa <- ifelse(is.na(finalCD8$CTaa), "No TCR", 
+                               paste0(finalCD8$sample_ID_Pub, "-", finalCD8$CTaa))
+
+clonesbypt <- table(finalCD8$patientCTaa, finalCD8$tissue_source)
+write.csv(clonesbypt, file = "CD8clones_byPatient_tissueSplit.csv")
+
+write.csv(finalCD8@meta.data, "finalCD8_metadata.csv")
+
+finalCD8_CDR3split <- finalCD8
+finalCD8_CDR3split@meta.data <- separate(data = finalCD8_CDR3split@meta.data, col = CTaa, into = c("alpha", "beta"), sep = "_")
+
+#McPAS-TCR exact match
+viruses <- c("Epstein Barr virus (EBV)", "Cytomegalovirus (CMV)", "Influenza")
+mcpas_db <- read.csv("~/Downloads/McPAS-TCR.csv")
+mcpas_db_matchRA <- mcpas_db %>% 
+  filter(Species == "Human") %>% 
+  filter(T.Cell.Type != "CD4") %>%
+  filter(CDR3.beta.aa %in% finalCD8_CDR3split$beta) %>%
+  filter(!is.na(CDR3.beta.aa)) %>%
+  filter(Pathology %in% viruses) %>%
+  filter(!is.na(Epitope.peptide)) %>% distinct(CDR3.beta.aa, Pathology, Epitope.peptide, MHC, Antigen.protein) %>%
+  mutate(db = "mcpas")
+
+vdjdb <- read.csv("~/Downloads/vdjdb_human_cmv_ebv_flu.csv") 
+vdjdb_matchRA <- vdjdb %>%
+  filter(species == "HomoSapiens") %>%
+  filter(mhc.class == "MHCI") %>%
+  filter(cdr3.beta %in% finalCD8_CDR3split$beta) %>%
+  filter(!is.na(cdr3.beta)) %>%
+  filter(!is.na(antigen.epitope)) %>% distinct(cdr3.beta, antigen.species, antigen.epitope, mhc.a, antigen.gene) %>%
+  select(cdr3.beta, antigen.species, antigen.gene, antigen.epitope, mhc.a) %>%
+  mutate(db = "vdjdb")
+
+colnames(vdjdb_matchRA) <- c("CDR3.beta.aa", "Pathology", "Antigen.protein", "Epitope.peptide", "MHC", "db")
+
+vdjdb_matchRA$Pathology <- plyr::mapvalues(x = vdjdb_matchRA$Pathology, from = c("CMV", "EBV", "InfluenzaA"), to = c("Cytomegalovirus (CMV)", "Epstein Barr virus (EBV)", "Influenza"))
+
+mcpas_vdjdb_matchRA <- rbind(mcpas_db_matchRA, vdjdb_matchRA)
+mcpas_vdjdb_matchRA$Antigen.protein <- plyr::mapvalues(x = mcpas_vdjdb_matchRA$Antigen.protein, 
+                                                       from = c("BMLF-1", "BMLF1", "BRLF1", "BZLF1", "EBNA-3A", "EBNA-6", "EBNA1", "EBNA3A", "EBNA4", "IE-1", "IE1",  "M", "Matrix protein (M1)", "NP177", "pp50", "pp65", "UL29/28"), 
+                                                       to = c("BMLF1", "BMLF1", "BRLF1", "BZLF1", "EBNA3A", "EBNA6", "EBNA1", "EBNA3A", "EBNA4", "IE1", "IE1",  "M1", "M1", "NP177", "pp50", "pp65", "UL29/28" ))
+
+write.csv(mcpas_vdjdb_matchRA, "~/Downloads/McPAS_VDJdb_RA_exact.csv")
+#then go through and make sure the hit's donor matches HLA with the epitope
+
+mcpas_vdjdb_matchRA_HLAfiltered <- read.csv("~/Downloads/McPAS_VDJdb_RA_exact_HLAmatchSubset.csv")
+mcpas_vdjdb_matchRA_HLAfiltered_cmv <- mcpas_vdjdb_matchRA_HLAfiltered %>% filter(Pathology == "Cytomegalovirus (CMV)")
+mcpas_vdjdb_matchRA_HLAfiltered_ebv <- mcpas_vdjdb_matchRA_HLAfiltered %>% filter(Pathology == "Epstein Barr virus (EBV)")
+mcpas_vdjdb_matchRA_HLAfiltered_flu <- mcpas_vdjdb_matchRA_HLAfiltered %>% filter(Pathology == "Influenza")
+
+finalCD8_CDR3split$mcpas_vdjdb_match <- ifelse(finalCD8_CDR3split$beta %in% mcpas_vdjdb_matchRA_HLAfiltered_cmv$CDR3.beta.aa, "CMV",
+                                         ifelse(finalCD8_CDR3split$beta %in% mcpas_vdjdb_matchRA_HLAfiltered_ebv$CDR3.beta.aa, "EBV",
+                                                ifelse(finalCD8_CDR3split$beta %in% mcpas_vdjdb_matchRA_HLAfiltered_flu$CDR3.beta.aa, "FLU", "No Match")))
+
+Idents(finalCD8_CDR3split) <- finalCD8_CDR3split$mcpas_vdjdb_match
+DimPlot(finalCD8_CDR3split, cells.highlight = list(WhichCells(finalCD8_CDR3split, idents = "CMV"), WhichCells(finalCD8_CDR3split, idents = "EBV"), WhichCells(finalCD8_CDR3split, idents = "FLU")), sizes.highlight = 1) +
+  scale_color_manual(name = NULL, limits=c("Group_1", "Group_2", "Group_3", "Unselected"), labels = c("CMV", "EBV", "FLU", "No Match"), values = c("#edae49", "#d1495b", "#00798c", "#e6e5e3")) +
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line = element_blank(),
+    plot.title = element_text(hjust = 0.5))
+ggsave("CD8_mcpas_vdjdb_UMAP.eps", width = 4.2, height = 3)
+
+DimPlot(finalCD8_CDR3split, cells.highlight = list(WhichCells(finalCD8_CDR3split, idents = "CMV"), WhichCells(finalCD8_CDR3split, idents = "EBV"), WhichCells(finalCD8_CDR3split, idents = "FLU")), sizes.highlight = 1, split.by = "tissue_source") +
+  scale_color_manual(name = NULL, limits=c("Group_1", "Group_2", "Group_3", "Unselected"), labels = c("CMV", "EBV", "FLU", "No Match"), values = c("#edae49", "#d1495b", "#00798c", "#e6e5e3")) +
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line = element_blank(),
+    plot.title = element_text(hjust = 0.5))
+ggsave("CD8_mcpas_vdjdb_UMAP_tissueSplit.eps", width = 7.5, height = 3)
+
+a <- DimPlot(finalCD8_CDR3split, cells.highlight = list(WhichCells(finalCD8_CDR3split, idents = "CMV")), sizes.highlight = 1) +
+  scale_color_manual(name = NULL, limits=c("Group_1", "Unselected"), labels = c("CMV", "No Match"), values = c("#edae49", "#e6e5e3")) + ggtitle("CMV") +
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line = element_blank(),
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "none")
+
+b <- DimPlot(finalCD8_CDR3split, cells.highlight = list(WhichCells(finalCD8_CDR3split, idents = "EBV")), sizes.highlight = 1) +
+  scale_color_manual(name = NULL, limits=c("Group_1", "Unselected"), labels = c("EBV", "No Match"), values = c("#d1495b", "#e6e5e3")) + ggtitle("EBV") +
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line = element_blank(),
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "none")
+
+c <- DimPlot(finalCD8_CDR3split, cells.highlight = list(WhichCells(finalCD8_CDR3split, idents = "FLU")), sizes.highlight = 1) +
+  scale_color_manual(name = NULL, limits=c("Group_1", "Unselected"), labels = c("FLU", "No Match"), values = c("#00798c", "#e6e5e3")) + ggtitle("FLU") +
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line = element_blank(),
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "none")
+
+a | b | c
+ggsave("CD8_mcpas_vdjdb_UMAP_virusMatchSplit.eps", width = 7.5, height = 3)
+
+#match by cluster
+finalCD8_CDR3split_withEpitope_cluster <- finalCD8_CDR3split@meta.data %>% 
+  group_by(clusters_names, beta) %>% add_tally() %>%
+  filter(mcpas_vdjdb_match != "No Match") %>% left_join(mcpas_vdjdb_matchRA_HLAfiltered, by = c("beta" = "CDR3.beta.aa")) %>%
+  distinct(clusters_names, beta, .keep_all = T) %>% select(clusters_names, mcpas_vdjdb_match, beta, Antigen.protein, n, tissue_source)
+
+finalCD8_CDR3split_withEpitope_cluster$Antigen.protein <- factor(finalCD8_CDR3split_withEpitope_cluster$Antigen.protein, levels = c("IE1", "pp50", "pp65", "UL29/28", "BMLF1", "BRLF1", "BZLF1", "EBNA1", "EBNA3A", "EBNA4", "M1", "NP177"))
+
+finalCD8_CDR3split_withEpitope_cluster %>%
+  ggplot(aes(x = clusters_names, y = n, fill = mcpas_vdjdb_match)) + 
+  geom_bar(stat = "identity", color = "black") +
+  theme_classic() + RotatedAxis() + xlab(NULL) + ylab("# Cells") + 
+  scale_y_continuous(breaks = c(0,10,20,30,40,50)) + scale_x_discrete(drop=FALSE) +
+  scale_fill_manual(values = c("#edae49", "#d1495b", "#00798c"), name = "Match")
+ggsave("CD8_mcpas_vdjdb_barplot_by_cluster.eps", width = 4.5, height = 2.5)
+
+finalCD8_CDR3split_withEpitope_cluster %>%
+  ggplot(aes(x = clusters_names, y = n, fill = mcpas_vdjdb_match)) + 
+  geom_bar(stat = "identity", color = "black") + facet_wrap(~tissue_source) +
+  theme_classic() + RotatedAxis() + xlab(NULL) + ylab("# Cells") + 
+  scale_y_continuous(breaks = c(0,5,10,15,20,25), limits = c(0,25)) + scale_x_discrete(drop=FALSE) +
+  scale_fill_manual(values = c("#edae49", "#d1495b", "#00798c"), name = "Match")
+ggsave("CD8_mcpas_vdjdb_barplot_by_cluster_tissueSplit.eps", width = 7, height = 3)
+
+finalCD8_CDR3split@meta.data %>%
+  mutate(anyvir = ifelse(mcpas_vdjdb_match %in% c("CMV", "EBV", "FLU"), "Viral", "No Match")) %>%
+  group_by(clusters_names, anyvir) %>%
+  dplyr::count() %>%
+  group_by(anyvir) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=anyvir ,y=Percent, fill=clusters_names)) +
+  geom_col() +
+  scale_fill_manual(values = cd8cols, name = "Cluster") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  scale_x_discrete(limits = c("Viral", "No Match")) +
+  ggtitle(NULL) +
+  ylab(NULL) +
+  xlab(NULL) + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm')) 
+ggsave("CD8_mcpas_vdjdb_barplot_byMatch_clusterBreakdown.eps", width = 3, height = 3)
+
+finalCD8_CDR3split@meta.data %>%
+  group_by(clusters_names, mcpas_vdjdb_match) %>%
+  dplyr::count() %>%
+  group_by(mcpas_vdjdb_match) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=mcpas_vdjdb_match ,y=Percent, fill=clusters_names)) +
+  geom_col() +
+  scale_fill_manual(values = cd8cols, name = "Cluster") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  ylab(NULL) +
+  xlab(NULL) + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm')) 
+ggsave("CD8_mcpas_vdjdb_barplot_bySplitVirus_clusterBreakdown.eps", width = 5, height = 3)
+
+#match by donor
+finalCD8_CDR3split_withEpitope_donor <- finalCD8_CDR3split@meta.data %>% 
+  group_by(sample_ID_Pub, beta) %>% add_tally() %>%
+  filter(mcpas_vdjdb_match != "No Match") %>% left_join(mcpas_vdjdb_matchRA_HLAfiltered, by = c("beta" = "CDR3.beta.aa")) %>%
+  distinct(sample_ID_Pub, beta, .keep_all = T) %>% select(sample_ID_Pub, mcpas_vdjdb_match, beta, Antigen.protein, n)
+
+finalCD8_CDR3split_withEpitope_donor$Antigen.protein <- factor(finalCD8_CDR3split_withEpitope_donor$Antigen.protein, levels = c("IE1", "pp50", "pp65", "UL29/28", "BMLF1", "BRLF1", "BZLF1", "EBNA1", "EBNA3A", "EBNA4", "M1", "NP177"))
+
+finalCD8_CDR3split_withEpitope_donor %>%
+  ggplot(aes(x = sample_ID_Pub, y = n, fill = mcpas_vdjdb_match)) + 
+  geom_bar(stat = "identity", color = "black") + 
+  theme_classic() + RotatedAxis() + xlab(NULL) + ylab("# Cells") + 
+  scale_y_continuous(breaks = c(0,10,20,30), limits = c(0,30)) + scale_x_discrete(drop=FALSE) +
+  scale_fill_manual(values = c("#edae49", "#d1495b", "#00798c"), name = "Match")
+ggsave("CD8_mcpas_vdjdb_barplot_by_donor.eps", width = 5, height = 2.5)
+
+viralepitopecols <- c(colorRampPalette(brewer.pal(8, "Set2"))(6), colorRampPalette(brewer.pal(8, "Set3"))(6))
+
+finalCD8_CDR3split_withEpitope_donor %>%
+  ggplot(aes(x = sample_ID_Pub, y = n, fill = Antigen.protein)) + 
+  geom_bar(stat = "identity", color = "black") + 
+  facet_wrap(~mcpas_vdjdb_match) + theme_classic() + RotatedAxis() + xlab(NULL) + ylab("# Cells") + 
+  scale_y_continuous(breaks = c(0,4,8,12,16), limits = c(0,16)) + scale_x_discrete(drop=FALSE) +
+  scale_fill_manual(values = viralepitopecols, name = "Epitope") +
+  theme(legend.key.size = unit(0.50, 'cm'))
+ggsave("CD8_mcpas_vdjdb_barplot_by_donor_epitope_virusSplit.eps", width = 9, height = 2.8)
+
+finalCD8_CDR3split_withEpitope_donor <- finalCD8_CDR3split@meta.data %>% 
+  group_by(sample_ID_Pub, beta) %>% add_tally() %>%
+  left_join(mcpas_vdjdb_matchRA_HLAfiltered, by = c("beta" = "CDR3.beta.aa")) %>%
+  distinct(sample_ID_Pub, beta, .keep_all = T) %>% select(sample_ID_Pub, mcpas_vdjdb_match, beta, Antigen.protein, n) %>% ungroup(beta) %>% 
+  mutate(Percent=100*n/sum(n)) %>% filter(mcpas_vdjdb_match != "No Match") 
+
+finalCD8_CDR3split_withEpitope_donor %>%
+  ggplot(aes(x = sample_ID_Pub, y = Percent, fill = mcpas_vdjdb_match)) + 
+  geom_bar(stat = "identity", color = "black") + 
+  theme_classic() + RotatedAxis() + xlab(NULL) + ylab("% Donor CD8+ Cells") + scale_x_discrete(drop=FALSE) +
+  scale_fill_manual(values = c("#edae49", "#d1495b", "#00798c"), name = "Match")
+ggsave("CD8_mcpas_vdjdb_barplot_by_donor_percent.eps", width = 5, height = 2.5)
+
+  
+#GLIPH viral-specificity 
+cmv_hla_gliph <- read.csv("~/Downloads/P6340_6UI8CODZTV_pblsyn_cmv_hla_gliphv2.csv")
+cmv_hla_gliph$virus <- "CMV"
+
+ebv_hla_gliph <- read.csv("~/Downloads/P6341_RVJMNK245D_pblsyn_ebv_hla_gliphv2.csv")
+ebv_hla_gliph$virus <- "EBV"
+
+flu_hla_gliph <- read.csv("~/Downloads/P6342_DTLYAYR1NI_pblsyn_flu_hla_gliphv2.csv")
+flu_hla_gliph$virus <- "FLU"
+
+gliph_filtered_vir <- rbind(cmv_hla_gliph, ebv_hla_gliph, flu_hla_gliph) %>% 
+  mutate(RAvir = substr(Sample, 1, 2)) %>% 
+  group_by(pattern, virus) %>% 
+  mutate(count = n_distinct(RAvir)) %>% 
+  filter(count > 1) %>% 
+  filter(number_subject > 1) %>% 
+  filter(Fisher_score < 0.01) %>% 
+  mutate(SampleRArem = Sample) %>%
+  mutate(across(c(SampleRArem),
+                ~ replace(.,   str_detect(., "RA"), NA))) %>%
+  mutate(mostFreqVirMHCepi = names(which.max(table(SampleRArem)))) %>% 
+  filter(grepl(paste0((substr(mostFreqVirMHCepi, 1, 1)), "\\*", (substr(mostFreqVirMHCepi, 2, 3))), HLA.A) | 
+           grepl(paste0((substr(mostFreqVirMHCepi, 1, 1)), "\\*", (substr(mostFreqVirMHCepi, 2, 3))), HLA.B) |
+            grepl(paste0((substr(mostFreqVirMHCepi, 1, 1)), "\\*", (substr(mostFreqVirMHCepi, 2, 3))), HLA.C)) %>%
+  #distinct(pattern, virus, .keep_all = T) %>% 
+  ungroup(virus) %>% 
+  mutate(pattern_all_vir = paste(unique(virus), collapse = ' ')) %>%
+  mutate(pattern_all_MHC = paste(unique(mostFreqVirMHCepi), collapse = ' ')) %>% 
+  filter(RAvir == "RA") %>% 
+  arrange(Sample) %>% 
+  mutate(pattern_all_RA = paste(unique(Sample), collapse = ' ')) %>% 
+  mutate(pattern_num_RA = str_count(pattern_all_RA, ":")) %>%
+  ungroup(pattern) %>%
+  group_by(TcRb) %>%
+  mutate(cdr3_all_pattern = paste(unique(pattern), collapse = ' ')) %>%
+  group_by(virus, TcRb) %>%
+  mutate(cdr3_all_pattern_byvir = paste(unique(pattern), collapse = ' ')) %>%
+  mutate(cdr3aa = paste0(TcRa, "_", TcRb)) %>%
+  mutate(Sample = substr(Sample, 1, 4)) %>%
+  mutate(Sample_cdr3aa = paste0(Sample, ":", cdr3aa))
+  
+#select(pattern, virus, mostFreqVirMHCepi, Sample, RAvir, pattern_all_MHC, pattern_all_vir, pattern_all_RA, pattern_num_RA) 
+#some multiple virus patterns, only one virus shows
+#dont combine pattern patients if each comes from a different HLA?
+
+gliph_filtered_vir_cmvonly <- gliph_filtered_vir %>% filter(virus == "CMV")
+gliph_filtered_vir_ebvonly <- gliph_filtered_vir %>% filter(virus == "EBV")
+gliph_filtered_vir_fluonly <- gliph_filtered_vir %>% filter(virus == "FLU")
+
+finalCD8$Sample_CTaa <- paste0(finalCD8$sample_ID_Pub, ":", finalCD8$CTaa)
+finalCD8$gliph_cmv <- ifelse(finalCD8$Sample_CTaa %in% gliph_filtered_vir_cmvonly$Sample_cdr3aa, "CMV", "No")
+finalCD8$gliph_ebv <- ifelse(finalCD8$Sample_CTaa %in% gliph_filtered_vir_ebvonly$Sample_cdr3aa, "EBV", "No")
+finalCD8$gliph_flu <- ifelse(finalCD8$Sample_CTaa %in% gliph_filtered_vir_fluonly$Sample_cdr3aa, "FLU", "No")
+
+finalCD8@meta.data %>%
+  mutate(Sample_CTaa = paste0(sample_ID_Pub, ":", CTaa)) %>%
+  mutate(gliph_vir_found = if_else(Sample_CTaa %in% unique(gliph_filtered_allvir$Sample_cdr3aa), gliph_filtered_allvir$pattern_all_vir, "No")) %>%
+  mutate(ebv_gliph = ifelse(is.na(CTnt),"No TCR", ebv_gliph))
+
+Idents(finalCD8) <- finalCD8$gliph_cmv
+DimPlot(finalCD8, cells.highlight = WhichCells(finalCD8, idents = "CMV"), sizes.highlight = 0.5) +
+  scale_color_manual(name = NULL, limits=c("Group_1", "Unselected"), labels = c("CMV", "All Others"), values = c("#edae49", "#e6e5e3")) +
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line = element_blank(),
+    plot.title = element_text(hjust = 0.5))
+ggsave("CD8_gliph_cmv_UMAP.eps", width = 4.2, height = 3)
+
+Idents(finalCD8) <- finalCD8$gliph_ebv
+DimPlot(finalCD8, cells.highlight = WhichCells(finalCD8, idents = "EBV"), sizes.highlight = 0.5) +
+  scale_color_manual(name = NULL, limits=c("Group_1", "Unselected"), labels = c("EBV", "All Others"), values = c("#d1495b", "#e6e5e3")) +
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line = element_blank(),
+    plot.title = element_text(hjust = 0.5))
+ggsave("CD8_gliph_ebv_UMAP.eps", width = 4.2, height = 3)
+
+Idents(finalCD8) <- finalCD8$gliph_flu
+DimPlot(finalCD8, cells.highlight = WhichCells(finalCD8, idents = "FLU"), sizes.highlight = 0.5) +
+  scale_color_manual(name = NULL, limits=c("Group_1", "Unselected"), labels = c("Flu", "All Others"), values = c("#00798c", "#e6e5e3")) +
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line = element_blank(),
+    plot.title = element_text(hjust = 0.5))
+ggsave("CD8_gliph_flu_UMAP.eps", width = 4.2, height = 3)
+
+Idents(finalCD8) <- finalCD8$clusters_names
+
+finalCD8$gliph_anyvirbinary <- ifelse((finalCD8$gliph_cmv == "CMV" | finalCD8$gliph_ebv == "EBV" | finalCD8$gliph_flu == "FLU"), "Vir", "No")
+
+finalCD8$gliph_anyvir <- ifelse((finalCD8$gliph_cmv == "CMV" & finalCD8$gliph_ebv == "EBV" & finalCD8$gliph_flu == "FLU"), 
+                               ("CMV, EBV, FLU"), ifelse((finalCD8$gliph_cmv == "CMV" & finalCD8$gliph_ebv == "EBV" & finalCD8$gliph_flu != "FLU"), 
+                                                         ("CMV, EBV"), ifelse((finalCD8$gliph_cmv == "CMV" & finalCD8$gliph_ebv != "EBV" & finalCD8$gliph_flu == "FLU"), 
+                                                                              ("CMV, FLU"), ifelse((finalCD8$gliph_cmv != "CMV" & finalCD8$gliph_ebv == "EBV" & finalCD8$gliph_flu == "FLU"), 
+                                                                                                   ("EBV, FLU"), ifelse((finalCD8$gliph_cmv == "CMV" & finalCD8$gliph_ebv != "EBV" & finalCD8$gliph_flu != "FLU"), 
+                                                                                                                        ("CMV"), ifelse((finalCD8$gliph_cmv != "CMV" & finalCD8$gliph_ebv == "EBV" & finalCD8$gliph_flu != "FLU"), 
+                                                                                                                                        ("EBV"), ifelse((finalCD8$gliph_cmv != "CMV" & finalCD8$gliph_ebv != "EBV" & finalCD8$gliph_flu == "FLU"), 
+                                                                                                                                                        ("FLU"), "No")))))))
+
+finalCD8$gliph_anyvir <- factor(finalCD8$gliph_anyvir, levels = c("CMV", "EBV", "FLU", "CMV, EBV", "CMV, FLU", "EBV, FLU", "CMV, EBV, FLU", "No"))
+
+#comparing % specific and age
+finalCD8@meta.data %>% filter(tissue_source == "SYN") %>%
+  distinct(sample_ID_Pub, CTaa, .keep_all= T) %>%
+  group_by(sample_ID_Pub, gliph_flu, age) %>%
+  dplyr::count() %>%
+  group_by(sample_ID_Pub, age) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>% filter(gliph_flu != "No") %>% 
+  ggplot(aes(x = as.numeric(age), y = as.numeric(Percent))) + 
+  geom_point() + geom_smooth(method = "lm") + stat_cor(label.y.npc = "top", label.x.npc = 0.2, size = 5) +
+  theme_classic() + xlab("Age") + ylab("% GLIPH Flu Match") +
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14))
+ggsave("CD8_gliph_flu_age_syn.png", width = 4, height = 4)
+
+finalCD8@meta.data %>% filter(tissue_source == "PBL") %>%
+  distinct(sample_ID_Pub, CTaa, .keep_all= T) %>%
+  group_by(sample_ID_Pub, gliph_flu, age) %>%
+  dplyr::count() %>%
+  group_by(sample_ID_Pub, age) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>% filter(gliph_flu != "No") %>% 
+  ggplot(aes(x = as.numeric(age), y = as.numeric(Percent))) + 
+  geom_point() + geom_smooth(method = "lm") + stat_cor(label.y.npc = "top", label.x.npc = 0.1, size = 5) +
+  theme_classic() + xlab("Age") + ylab("% GLIPH Flu Match") +
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14))
+ggsave("CD8_gliph_flu_age_pbl.png", width = 4, height = 4)
+
+finalCD8@meta.data %>% 
+  distinct(sample_ID_Pub, CTaa, .keep_all= T) %>%
+  group_by(sample_ID_Pub, gliph_flu, age) %>%
+  dplyr::count() %>%
+  group_by(sample_ID_Pub, age) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>% filter(gliph_flu != "No") %>% 
+  ggplot(aes(x = as.numeric(age), y = as.numeric(Percent))) + 
+  geom_point() + geom_smooth(method = "lm") + stat_cor(label.y.npc = "top", label.x.npc = 0.2, size = 5) +
+  theme_classic() + xlab("Age") + ylab("% GLIPH Flu Match") +
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14))
+ggsave("CD8_gliph_flu_age_all.png", width = 4, height = 4)
+
+finalCD8@meta.data %>% filter(tissue_source == "SYN") %>%
+  distinct(sample_ID_Pub, CTaa, .keep_all= T) %>%
+  group_by(sample_ID_Pub, gliph_cmv, age) %>%
+  dplyr::count() %>%
+  group_by(sample_ID_Pub, age) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>% filter(gliph_cmv != "No") %>% 
+  ggplot(aes(x = as.numeric(age), y = as.numeric(Percent))) + 
+  geom_point() + geom_smooth(method = "lm") + stat_cor(label.y.npc = "top", label.x.npc = 0.2, size = 5) +
+  theme_classic() + xlab("Age") + ylab("% GLIPH CMV Match") +
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14))
+ggsave("CD8_gliph_cmv_age_syn.png", width = 4, height = 4)
+
+finalCD8@meta.data %>% filter(tissue_source == "PBL") %>%
+  distinct(sample_ID_Pub, CTaa, .keep_all= T) %>%
+  group_by(sample_ID_Pub, gliph_cmv, age) %>%
+  dplyr::count() %>%
+  group_by(sample_ID_Pub, age) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>% filter(gliph_cmv != "No") %>% 
+  ggplot(aes(x = as.numeric(age), y = as.numeric(Percent))) + 
+  geom_point() + geom_smooth(method = "lm") + stat_cor(label.y.npc = "top", label.x.npc = 0.2, size = 5) +
+  theme_classic() + xlab("Age") + ylab("% GLIPH CMV Match") +
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14))
+ggsave("CD8_gliph_cmv_age_pbl.png", width = 4, height = 4)
+
+finalCD8@meta.data %>% 
+  distinct(sample_ID_Pub, CTaa, .keep_all= T) %>%
+  group_by(sample_ID_Pub, gliph_cmv, age) %>%
+  dplyr::count() %>%
+  group_by(sample_ID_Pub, age) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>% filter(gliph_cmv != "No") %>% 
+  ggplot(aes(x = as.numeric(age), y = as.numeric(Percent))) + 
+  geom_point() + geom_smooth(method = "lm") + stat_cor(label.y.npc = "top", label.x.npc = 0.2, size = 5) +
+  theme_classic() + xlab("Age") + ylab("% GLIPH CMV Match") +
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14))
+ggsave("CD8_gliph_cmv_age_all.png", width = 4, height = 4)
+
+finalCD8@meta.data %>% filter(tissue_source == "SYN") %>%
+  distinct(sample_ID_Pub, CTaa, .keep_all= T) %>%
+  group_by(sample_ID_Pub, gliph_ebv, age) %>%
+  dplyr::count() %>%
+  group_by(sample_ID_Pub, age) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>% filter(gliph_ebv != "No") %>% 
+  ggplot(aes(x = as.numeric(age), y = as.numeric(Percent))) + 
+  geom_point() + geom_smooth(method = "lm") + stat_cor(label.y.npc = "top", label.x.npc = 0.2, size = 5) +
+  theme_classic() + xlab("Age") + ylab("% GLIPH EBV Match") +
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14))
+ggsave("CD8_gliph_ebv_age_syn.png", width = 4, height = 4)
+
+finalCD8@meta.data %>% filter(tissue_source == "PBL") %>%
+  distinct(sample_ID_Pub, CTaa, .keep_all= T) %>%
+  group_by(sample_ID_Pub, gliph_ebv, age) %>%
+  dplyr::count() %>%
+  group_by(sample_ID_Pub, age) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>% filter(gliph_ebv != "No") %>% 
+  ggplot(aes(x = as.numeric(age), y = as.numeric(Percent))) + 
+  geom_point() + geom_smooth(method = "lm") + stat_cor(label.y.npc = "top", label.x.npc = 0.2, size = 5) +
+  theme_classic() + xlab("Age") + ylab("% GLIPH EBV Match") +
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14))
+ggsave("CD8_gliph_ebv_age_pbl.png", width = 4, height = 4)
+
+finalCD8@meta.data %>% 
+  distinct(sample_ID_Pub, CTaa, .keep_all= T) %>%
+  group_by(sample_ID_Pub, gliph_ebv, age) %>%
+  dplyr::count() %>%
+  group_by(sample_ID_Pub, age) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>% filter(gliph_ebv != "No") %>% 
+  ggplot(aes(x = as.numeric(age), y = as.numeric(Percent))) + 
+  geom_point() + geom_smooth(method = "lm") + stat_cor(label.y.npc = "top", label.x.npc = 0.2, size = 5) +
+  theme_classic() + xlab("Age") + ylab("% GLIPH EBV Match") +
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14))
+ggsave("CD8_gliph_ebv_age_all.png", width = 4, height = 4)
+
+finalCD8@meta.data %>% filter(tissue_source == "SYN") %>%
+  distinct(sample_ID_Pub, CTaa, .keep_all= T) %>%
+  group_by(sample_ID_Pub, gliph_anyvirbinary, age) %>%
+  dplyr::count() %>%
+  group_by(sample_ID_Pub, age) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>% filter(gliph_anyvirbinary != "No") %>% 
+  ggplot(aes(x = as.numeric(age), y = as.numeric(Percent))) + 
+  geom_point() + geom_smooth(method = "lm") + stat_cor(label.y.npc = 1, label.x.npc = 0.3) +
+  theme_classic() + xlab("Age") + ylab("% GLIPH Virus Match")
+ggsave("CD8_gliph_anyvir_age_syn.png", width = 4, height = 4)
+
+finalCD8@meta.data %>% filter(tissue_source == "PBL") %>%
+  distinct(sample_ID_Pub, CTaa, .keep_all= T) %>%
+  group_by(sample_ID_Pub, gliph_anyvirbinary, age) %>%
+  dplyr::count() %>%
+  group_by(sample_ID_Pub, age) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>% filter(gliph_anyvirbinary != "No") %>% 
+  ggplot(aes(x = as.numeric(age), y = as.numeric(Percent))) + 
+  geom_point() + geom_smooth(method = "lm") + stat_cor(label.y.npc = 1, label.x.npc = 0.3) +
+  theme_classic() + xlab("Age") + ylab("% GLIPH Virus Match")
+ggsave("CD8_gliph_anyvir_age_pbl.png", width = 4, height = 4)
+
+finalCD8@meta.data %>% 
+  distinct(sample_ID_Pub, CTaa, .keep_all= T) %>%
+  group_by(sample_ID_Pub, gliph_anyvirbinary, age) %>%
+  dplyr::count() %>%
+  group_by(sample_ID_Pub, age) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>% filter(gliph_anyvirbinary != "No") %>% 
+  ggplot(aes(x = as.numeric(age), y = as.numeric(Percent))) + 
+  geom_point() + geom_smooth(method = "lm")+ stat_cor(label.y.npc = 1, label.x.npc = 0.3) +
+  theme_classic() + xlab("Age") + ylab("% GLIPH Virus Match")
+ggsave("CD8_gliph_anyvir_age_all.png", width = 4, height = 4)
+
+#plotting all viral specific 
+Idents(finalCD8) <- finalCD8$gliph_anyvir
+DimPlot(finalCD8, cells.highlight = list(WhichCells(finalCD8, idents = "CMV"), 
+                                         WhichCells(finalCD8, idents = "EBV"),
+                                         WhichCells(finalCD8, idents = "FLU"), 
+                                         WhichCells(finalCD8, idents = "CMV, EBV"),
+                                         WhichCells(finalCD8, idents = "CMV, FLU"), 
+                                         WhichCells(finalCD8, idents = "EBV, FLU"),
+                                         WhichCells(finalCD8, idents = "CMV, EBV, FLU")), sizes.highlight = 0.5) +
+  scale_color_manual(name = NULL, limits=c("Group_1", "Group_2", "Group_3", "Group_4", "Group_5", "Group_6", "Group_7", "Unselected"), 
+                     labels = c("CMV", "EBV", "FLU", "CMV, EBV", "CMV, FLU", "EBV, FLU", "CMV, EBV, FLU", "None"), 
+                     values = c("#edae49", "#d1495b", "#00798c", cd8cols[c(1,3,5,9)], "#e6e5e3")) +
+  theme(
+    legend.text = element_text(size = 10),
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line = element_blank(),
+    plot.title = element_text(hjust = 0.5),
+    legend.key.size = unit(0.35, 'cm'))
+ggsave("CD8_gliph_any_UMAP.eps", width = 4.7, height = 3)
+
+finalCD8@meta.data %>% 
+  group_by(sample_ID_Pub, clusters_names, gliph_anyvirbinary) %>%
+  dplyr::count() %>% ungroup(clusters_names) %>% mutate(Percent=100*n/sum(n)) %>% 
+  ungroup(sample_ID_Pub, gliph_anyvirbinary) %>% group_by(clusters_names) %>% pairwise_t_test(Percent ~ gliph_anyvirbinary)
+
+finalCD8@meta.data %>%
+  group_by(clusters_names, gliph_anyvirbinary) %>%
+  dplyr::count() %>%
+  group_by(gliph_anyvirbinary) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=gliph_anyvirbinary ,y=Percent, fill=clusters_names)) +
+  geom_col() +
+  scale_fill_manual(values = cd8cols, name = "Cluster") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  scale_x_discrete(limits = c("Vir", "No"), labels = c("Viral", "No Match")) +
+  ggtitle(NULL) +
+  ylab(NULL) +
+  xlab(NULL) + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm')) 
+ggsave("CD8_gliph_barplot_anyvir_clusterBreakdown.eps", width = 3, height = 3)
+
+finalCD8@meta.data %>% filter(tissue_source == "SYN") %>%
+  group_by(sample_ID_Pub, clusters_names, gliph_anyvirbinary) %>%
+  dplyr::count() %>% ungroup(clusters_names) %>% mutate(Percent=100*n/sum(n)) %>% 
+  ungroup(sample_ID_Pub, gliph_anyvirbinary) %>% group_by(clusters_names) %>% pairwise_t_test(Percent ~ gliph_anyvirbinary)
+
+finalCD8@meta.data %>% filter(tissue_source == "SYN") %>%
+  group_by(clusters_names, gliph_anyvirbinary) %>%
+  dplyr::count() %>%
+  group_by(gliph_anyvirbinary) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=gliph_anyvirbinary ,y=Percent, fill=clusters_names)) +
+  geom_col() +
+  scale_fill_manual(values = cd8cols, name = "Cluster") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  scale_x_discrete(limits = c("Vir", "No"), labels = c("Viral", "No Match")) +
+  ggtitle(NULL) +
+  ylab(NULL) +
+  xlab(NULL) + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm')) 
+ggsave("CD8_gliph_barplot_anyvir_clusterBreakdown_SYN.eps", width = 3, height = 3)
+
+finalCD8@meta.data %>% filter(tissue_source == "PBL") %>%
+  group_by(sample_ID_Pub, clusters_names, gliph_anyvirbinary) %>%
+  dplyr::count() %>% ungroup(clusters_names) %>% mutate(Percent=100*n/sum(n)) %>% 
+  ungroup(sample_ID_Pub, gliph_anyvirbinary) %>% group_by(clusters_names) %>% pairwise_t_test(Percent ~ gliph_anyvirbinary)
+
+finalCD8@meta.data %>% filter(tissue_source == "PBL") %>%
+  group_by(clusters_names, gliph_anyvirbinary) %>%
+  dplyr::count() %>%
+  group_by(gliph_anyvirbinary) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=gliph_anyvirbinary ,y=Percent, fill=clusters_names)) +
+  geom_col() +
+  scale_fill_manual(values = cd8cols, name = "Cluster") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  scale_x_discrete(limits = c("Vir", "No"), labels = c("Viral", "No Match")) +
+  ggtitle(NULL) +
+  ylab(NULL) +
+  xlab(NULL) + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm')) 
+ggsave("CD8_gliph_barplot_anyvir_clusterBreakdown_PBL.eps", width = 3, height = 3)
+
+finalCD8@meta.data %>%
+  group_by(clusters_names, gliph_anyvirbinary, tissue_source) %>%
+  dplyr::count() %>%
+  group_by(gliph_anyvirbinary, tissue_source) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=gliph_anyvirbinary ,y=Percent, fill=clusters_names)) + facet_wrap(~tissue_source) +
+  geom_col() +
+  scale_fill_manual(values = cd8cols, name = "Cluster") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  scale_x_discrete(limits = c("Vir", "No"), labels = c("Viral", "No Match")) +
+  ggtitle(NULL) +
+  ylab(NULL) +
+  xlab(NULL) + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm')) 
+ggsave("CD8_gliph_barplot_anyvir_clusterBreakdown_tissueSplit.eps", width = 4, height = 3)
+
+finalCD8@meta.data %>%
+  filter(cloneType != "No TCR information") %>%
+  group_by(cloneType, gliph_anyvirbinary) %>%
+  dplyr::count() %>%
+  group_by(gliph_anyvirbinary) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=gliph_anyvirbinary ,y=Percent, fill=cloneType)) +
+  geom_col() +
+  scale_fill_brewer(palette = "Blues", direction = -1, name = "Clone Type") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  scale_x_discrete(limits = c("Vir", "No"), labels = c("Viral", "No Match")) +
+  ggtitle(NULL) +
+  ylab(NULL) +
+  xlab(NULL) + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm')) 
+ggsave("CD8_gliph_barplot_anyvir_clonalBreakdown.eps", width = 3.5, height = 3)
+
+Idents(finalCD8) <- finalCD8$gliph_anyvir
+DimPlot(finalCD8, cells.highlight = list(WhichCells(finalCD8, idents = "CMV"), 
+                                         WhichCells(finalCD8, idents = "EBV"),
+                                         WhichCells(finalCD8, idents = "FLU"), 
+                                         WhichCells(finalCD8, idents = "CMV, EBV"),
+                                         WhichCells(finalCD8, idents = "EBV, FLU")), sizes.highlight = 0.5) +
+  scale_color_manual(name = NULL, limits=c("Group_1", "Group_2", "Group_3", "Group_4", "Group_5", "Unselected"), 
+                     labels = c("CMV", "EBV", "FLU", "CMV, EBV", "EBV, FLU", "None"), 
+                     values = c(cd8cols[1:5], "#e6e5e3")) +
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line = element_blank(),
+    plot.title = element_text(hjust = 0.5))
+
+finalCD8@meta.data %>% 
+  distinct(sample_ID_Pub, CTaa, .keep_all= T) %>%
+  group_by(sample_ID_Pub, gliph_anyvir) %>%
+  dplyr::count() %>%
+  group_by(sample_ID_Pub) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>% filter(gliph_anyvir != "No") %>%
+  ggplot(aes(x=sample_ID_Pub,y=n, fill = gliph_anyvir)) +
+  geom_bar(stat = "identity", color = "black") + 
+  scale_fill_manual(values = c("#edae49", "#d1495b", "#00798c", cd8cols[c(1,3,5,9)], "#e6e5e3"), name = "Specificity") +
+  scale_x_discrete(drop=FALSE) + 
+  ggtitle(NULL) +
+  ylab("# Clones") +
+  xlab(NULL) + 
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm')) 
+ggsave("CD8_gliph_clones_barplot_by_donor.eps", width = 5.5, height = 2.5)
+
+finalCD8@meta.data %>% 
+  group_by(sample_ID_Pub, gliph_anyvir) %>%
+  dplyr::count() %>%
+  group_by(sample_ID_Pub) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>% filter(gliph_anyvir != "No") %>%
+  ggplot(aes(x=sample_ID_Pub,y=n, fill = gliph_anyvir)) +
+  geom_bar(stat = "identity", color = "black") + 
+  scale_fill_manual(values = c("#edae49", "#d1495b", "#00798c", cd8cols[c(1,3,5,9)], "#e6e5e3"), name = "Specificity") +
+  scale_x_discrete(drop=FALSE) + 
+  ggtitle(NULL) +
+  ylab("# Cells") +
+  xlab(NULL) + 
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm')) 
+ggsave("CD8_gliph_cells_barplot_by_donor.eps", width = 5.5, height = 2.5)
+
+finalCD8@meta.data %>% 
+  group_by(sample_ID_Pub, gliph_anyvir) %>%
+  dplyr::count() %>%
+  group_by(sample_ID_Pub) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>% filter(gliph_anyvir != "No") %>%
+  ggplot(aes(x=sample_ID_Pub,y=Percent, fill = gliph_anyvir)) +
+  geom_bar(stat = "identity", color = "black") + 
+  scale_fill_manual(values = c("#edae49", "#d1495b", "#00798c", cd8cols[c(1,3,5,9)], "#e6e5e3"), name = "Specificity") +
+  scale_x_discrete(drop=FALSE) + 
+  ggtitle(NULL) +
+  ylab("% Donor CD8+ Cells") +
+  xlab(NULL) + 
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm')) 
+ggsave("CD8_gliph_cells_barplot_by_donor_percent.eps", width = 5.5, height = 2.5)
+
+finalCD8@meta.data %>% filter(tissue_source == "SYN") %>%
+  distinct(sample_ID_Pub, clusters_names, CTaa, .keep_all= T) %>%
+  group_by(sample_ID_Pub, clusters_names, gliph_flu) %>%
+  dplyr::count() %>%
+  group_by(sample_ID_Pub, clusters_names) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>% filter(gliph_flu != "No") %>% 
+  ggplot(aes(x = clusters_names, y = Percent, group = sample_ID_Pub)) + 
+  geom_point() + 
+  geom_line(aes(color = sample_ID_Pub)) + 
+  theme_classic() + RotatedAxis()
+
+tphcytotoxstat <- finalCD8@meta.data %>% filter(cloneType != "No TCR information") %>% filter(sample_ID_Pub != "RA04") %>%
+group_by(sample_ID_Pub, gliph_anyvirbinary, clusters_names) %>%
+  mutate(mean = mean(Trm_sig1)) %>% distinct(sample_ID_Pub, gliph_anyvirbinary, clusters_names, .keep_all=T) %>% select(mean) %>% ungroup(sample_ID_Pub, gliph_anyvirbinary) %>% pairwise_t_test(mean ~ gliph_anyvirbinary) %>% add_significance() %>% add_y_position() %>% mutate(y.position = 1.05*y.position)
+
+finalCD8@meta.data%>%filter(cloneType != "No TCR information") %>% filter(sample_ID_Pub != "RA04") %>%
+  group_by(sample_ID_Pub, gliph_anyvirbinary, clusters_names) %>%
+  mutate(mean = mean(Trm_sig1)) %>% distinct(sample_ID_Pub, gliph_anyvirbinary, clusters_names, .keep_all=T) %>% select(mean) %>%
+  ggplot(aes(x= gliph_anyvirbinary, y = mean)) + 
+  geom_boxplot() + facet_wrap(~clusters_names) +
+  stat_pvalue_manual(tphcytotoxstat) +
+  scale_x_discrete(labels = c("= 1", " > 1")) + xlab(NULL) + ylab("Cytotoxicity Signature") +
+  theme_classic() + 
+  theme(axis.title.y = element_text(size = 10)) 
+
+
+#trying to categorize clones by tissue sharing
+cloneCategorySample <- read.csv("finalCD8_metadata_sampleCloneInformation.csv", row.names = 1)
+finalCD8 <- AddMetaData(finalCD8, cloneCategorySample)
+
+Idents(finalCD8) <- finalCD8$cloneTissueCategory
+current.cluster.ids <- c("Blood Enriched", "Blood Expanded", "Blood Singlet", "Dual Expanded", "Dual Unexpanded", "No TCR", "Tissue Enriched", "Tissue Expanded", "Tissue Singlet")
+new.cluster.ids <- c("Both", "Blood Only", "Blood Only", "Both", "Both", "No TCR", "Both", "Tissue Only", "Tissue Only")
+finalCD8@active.ident <- plyr::mapvalues(x = finalCD8@active.ident, from = current.cluster.ids, to = new.cluster.ids)
+finalCD8$cloneTissueCategoryCollapsed <- finalCD8@active.ident
+
+DimPlot(finalCD8, group.by = "clusters_names", split.by = "cloneTissueCombinedCatNum", ncol = 3) +
+  scale_color_manual(values = cd8cols) + ggtitle(NULL) + theme(legend.position = "none")
+
+finalCD8@meta.data %>%
+  group_by(clusters_names, cloneTissueCombinedCatNum) %>%
+  dplyr::count() %>%
+  group_by(clusters_names) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=clusters_names,y=Percent, fill = cloneTissueCombinedCatNum)) +
+  geom_col() +
+  scale_fill_brewer(palette = "Paired") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  labs(fill = "Category") +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10)) 
+
+finalCD8@meta.data %>%
+  group_by(cloneTissueCombinedCatNum, clusters_names) %>%
+  dplyr::count() %>%
+  group_by(cloneTissueCombinedCatNum) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=cloneTissueCombinedCatNum,y=Percent, fill = clusters_names)) +
+  geom_col() +
+  scale_fill_manual(values = cd8cols) +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  labs(fill = "Category") +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10)) 
+
+finalcd8_tcrbySample <- expression2List(finalCD8, group = "sampleTissue_Pub")
+cd8diversity_bySample <- clonalDiversity(finalcd8_tcrbySample, cloneCall = "aa", exportTable = T)
+
+cd8metadataDiversity <- finalCD8@meta.data %>% distinct(sampleTissue_Pub, .keep_all = T) %>%
+  left_join(cd8diversity_bySample, by = c("sampleTissue_Pub" = "samples"))
+
+ggplot(cd8metadataDiversity, aes(x = tissue_source, y = Shannon, color = tissue_source)) +
+  geom_point() +
+  geom_line(aes(group = sample_ID_Pub), color = "black") +
+  theme_classic() +
+  scale_color_manual(values = c("#f2a21e", "#88a0c4"), name = "Source", labels = c("PBL", "SYN")) +
+  theme(legend.position = "none") +
+  ylab("Shannon Index") + xlab(NULL)
+
+ggplot(cd8metadataDiversity, aes(x = CTAP, y = Shannon)) +
+  geom_boxplot() +
+  geom_point(aes(color = tissue_source)) +
+  theme_classic() +
+  scale_color_manual(values = c("#f2a21e", "#88a0c4"), name = "Source", labels = c("PBL", "SYN")) +
+  ylab("Shannon Index") + xlab(NULL)
+
+mcpasTCRs <- read.csv("~/Downloads/McPAS-TCR.csv")
+mcpasTCRs_pathogen <- mcpasTCRs %>%
+  filter(Species == "Human") %>%
+  filter(Category == "Pathogens")
+mcpasTCRs_human <- mcpasTCRs %>%
+  filter(Species == "Human")
+
+cd8_pathogen_public <- finalCD8@meta.data %>%
+  separate(CTaa, into = c("alpha", "beta"), sep="_(?=[^_]+$)") %>%
+  mutate(public_pathogen = if_else(beta %in% mcpasTCRs_pathogen$CDR3.beta.aa, 
+                                   if_else(alpha %in% mcpasTCRs_pathogen$CDR3.beta.aa, "Both Public", "Beta Public"), 
+                                   if_else(alpha %in% mcpasTCRs_pathogen$CDR3.beta.aa, "Alpha Public", "Both Private"))) %>%
+  mutate(public_pathogen = ifelse(is.na(CTnt),"No TCR",public_pathogen))
+
+cd8_all_public <- finalCD8@meta.data %>%
+  separate(CTaa, into = c("alpha", "beta"), sep="_(?=[^_]+$)") %>%
+  mutate(public_any = if_else(beta %in% mcpasTCRs_human$CDR3.beta.aa, 
+                                   if_else(alpha %in% mcpasTCRs_human$CDR3.beta.aa, "Both Public", "Beta Public"), 
+                                   if_else(alpha %in% mcpasTCRs_human$CDR3.beta.aa, "Alpha Public", "Both Private"))) %>%
+  mutate(public_any = ifelse(is.na(CTnt),"No TCR",public_any))
+  
+cd8_pathogen_public %>%
+  group_by(clusters_names, public_pathogen) %>%
+  dplyr::count() %>%
+  group_by(clusters_names) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=clusters_names,y=Percent, fill=public_pathogen)) +
+  geom_col() +
+  scale_fill_brewer(palette = "Spectral", direction = 1, name = "Publicity \n(Pathogens)") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  ylab(NULL) +
+  xlab(NULL) + 
+  theme_classic() 
+
+cd8_all_public %>%
+  group_by(clusters_names, public_any) %>%
+  dplyr::count() %>%
+  group_by(clusters_names) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=clusters_names,y=Percent, fill=public_any)) +
+  geom_col() +
+  scale_fill_brewer(palette = "Spectral", direction = 1, name = "Publicity \n(All McPAS)") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  ylab(NULL) +
+  xlab(NULL) + 
+  theme_classic() 
+
+cd8_pathogen_public %>% filter(cloneTissueNum != "No TCR") %>% filter(public_pathogen == "Beta Public") %>%
+  group_by(cloneTissueCombinedCatNum, public_pathogen) %>%
+  dplyr::count() %>%
+  group_by(cloneTissueCombinedCatNum) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=cloneTissueCombinedCatNum,y=n/sum(n), fill=public_pathogen)) +
+  geom_col() +
+  scale_fill_brewer(palette = "Set1", direction = 1, name = "Publicity \n(Pathogens)") +
+  ggtitle(NULL) +
+  ylab(NULL) +
+  xlab(NULL) + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1))
+
+cd8_pathogen_public %>%
+  group_by(CTnt, public_pathogen, tissue_source) %>% count() %>%
+  spread(tissue_source, n) %>%
+  replace_na(list(SYN = 0, PBL = 0)) %>%
+  ggplot(aes(x = PBL, y = SYN, color = public_pathogen)) + 
+  geom_point(position = position_jitter(width = 0.1, height = 0.1)) + 
+  scale_x_continuous(trans=scales::pseudo_log_trans(base = 10), breaks = c(0, 1, 10, 100, 500), limits = c(0, 500)) + 
+  scale_y_continuous(trans=scales::pseudo_log_trans(base = 10), breaks = c(0, 1, 10, 100, 500), limits = c(0, 500)) + 
+  scale_color_manual(values = c("lightgrey", "red", "lightgrey", "lightgrey")) 
+
+cd8_0_clones <- finalCD8@meta.data %>% filter(clusters_names == 0) %>% select(CTaa)
+cd8_1_clones <- finalCD8@meta.data %>% filter(clusters_names == 1) %>% select(CTaa)
+cd8_2_clones <- finalCD8@meta.data %>% filter(clusters_names == 2) %>% select(CTaa)
+cd8_3_clones <- finalCD8@meta.data %>% filter(clusters_names == 3) %>% select(CTaa)
+cd8_4_clones <- finalCD8@meta.data %>% filter(clusters_names == 4) %>% select(CTaa)
+cd8_5_clones <- finalCD8@meta.data %>% filter(clusters_names == 5) %>% select(CTaa)
+cd8_6_clones <- finalCD8@meta.data %>% filter(clusters_names == 6) %>% select(CTaa)
+cd8_7_clones <- finalCD8@meta.data %>% filter(clusters_names == 7) %>% select(CTaa)
+cd8_8_clones <- finalCD8@meta.data %>% filter(clusters_names == 8) %>% select(CTaa)
+cd8_9_clones <- finalCD8@meta.data %>% filter(clusters_names == 9) %>% select(CTaa)
+cd8_10_clones <- finalCD8@meta.data %>% filter(clusters_names == 10) %>% select(CTaa)
+cd8_11_clones <- finalCD8@meta.data %>% filter(clusters_names == 11) %>% select(CTaa)
+cd8_12_clones <- finalCD8@meta.data %>% filter(clusters_names == 12) %>% select(CTaa)
+
+cd8_0_clones <- cd8_0_clones$CTaa
+cd8_1_clones <- cd8_1_clones$CTaa
+cd8_2_clones <- cd8_2_clones$CTaa
+cd8_3_clones <- cd8_3_clones$CTaa
+cd8_4_clones <- cd8_4_clones$CTaa
+cd8_5_clones <- cd8_5_clones$CTaa
+cd8_6_clones <- cd8_6_clones$CTaa
+cd8_7_clones <- cd8_7_clones$CTaa
+cd8_8_clones <- cd8_8_clones$CTaa
+cd8_9_clones <- cd8_9_clones$CTaa
+cd8_10_clones <- cd8_10_clones$CTaa
+cd8_11_clones <- cd8_11_clones$CTaa
+cd8_12_clones <- cd8_12_clones$CTaa
+
+
+list_clones <- list("C0" = cd8_0_clones, "C1" = cd8_1_clones, "C2" = cd8_2_clones, "C3" = cd8_3_clones, "C4" = cd8_4_clones, "C5" = cd8_5_clones, "C6" = cd8_6_clones, "C7" = cd8_7_clones, "C8" = cd8_8_clones, "C9" = cd8_9_clones, "C10" = cd8_10_clones, "C11" = cd8_11_clones, "C12" = cd8_12_clones)
+
+upset(fromList(list_clones), sets = c("C12", "C11", "C10", "C9", "C8", "C7", "C6", "C5", "C4", "C3", "C2", "C1", "C0"), keep.order = T, mainbar.y.label = "Number of Overlapping Clones", sets.x.label = "Clones in Cluster", order.by = "freq")
+
+
+finalCD8@meta.data %>%
+  filter(CTaa %in% na.omit(intersect(cd8_2_clones, cd8_9_clones))) %>% 
+  group_by(sampleTissue_Pub, CTaa, clusters_names) %>% 
+  add_tally(name = "clusterCloneSize") %>%
+  select(sampleTissue_Pub, CTaa, clusters_names, clusterCloneSize) %>% 
+  distinct(sampleTissue_Pub, CTaa, clusters_names, .keep_all = T) %>% 
+  arrange(sampleTissue_Pub, CTaa)
+
+finalCD8_SYN <- subset(finalCD8, subset = tissue_source == "SYN")
+finalCD8_SYN <- subset(finalCD8_SYN, subset = collection != "Arthroplasty")
+finalCD8_SYN <- subset(finalCD8_SYN, subset = clusters_names == "Naive")
+
+finalCD8_SYN@meta.data$ccp_binary <- ifelse(finalCD8_SYN@meta.data$ccp_result > 200, "More than 200",
+                                            ifelse(finalCD8_SYN@meta.data$ccp_result == "No info", "No info", "Less than 200"))
+                                            
+cd8_syn_tcrs <- expression2List(finalCD8_SYN, group = "sample_ID_Pub")
+cd8_syn_patient_diversity <- as.data.frame(clonalDiversity(cd8_syn_tcrs, cloneCall = "aa", exportTable = T))
+distinct_finalcd8_syn <- finalCD8_SYN@meta.data %>% distinct(sample_ID_Pub, .keep_all = T)
+cd8_syn_patient_diversity <- left_join(cd8_syn_patient_diversity, distinct_finalcd8_syn, by = c("samples" = "sample_ID_Pub")) 
+
+a <- ggplot(cd8_syn_patient_diversity, aes(x = as.numeric(RA_duration), y = Shannon)) + geom_point() + stat_cor() + 
+  theme_classic() + xlab("RA Duration (Yrs)")
+
+b <- ggplot(cd8_syn_patient_diversity, aes(x = RA_duration_binary, y = Shannon)) + geom_point() + stat_compare_means(method = "t") + 
+  theme_classic() + xlab("RA Duration (Yrs)")
+
+c <- ggplot(cd8_syn_patient_diversity, aes(x = as.numeric(ccp_result), y = Shannon)) + geom_point() + stat_cor() + 
+  theme_classic() + xlab("CCP")
+
+d <- ggplot(cd8_syn_patient_diversity, aes(x = ccp_binary, y = Shannon)) + geom_point() + stat_compare_means(method = "t") + 
+  theme_classic() + xlab("CCP")
+
+e <- ggplot(cd8_syn_patient_diversity, aes(x = as.numeric(rf_result), y = Shannon)) + geom_point() + stat_cor() + 
+  theme_classic() + xlab("RF")
+
+f <- ggplot(cd8_syn_patient_diversity, aes(x = rf_binary, y = Shannon)) + geom_point() + stat_compare_means(method = "t") + 
+  theme_classic() + xlab("RF")
+
+(a | c | e) / (b + d + f)
+
+saveRDS(finalCD8, file = "20220308_finalCD8.RDS")
