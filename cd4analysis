@@ -1,0 +1,1906 @@
+library(Seurat)
+library(dplyr)
+library(harmony)
+library(symphony)
+library(ggplot2)
+library(RColorBrewer)
+library(scRepertoire)
+library(patchwork)
+library(cowplot)
+library(pheatmap)
+library(ggpubr)
+library(rstatix)
+library(tidyr)
+library(stringr)
+library(circlize)
+library(ComplexHeatmap)
+library(CellChat)
+library(UpSetR)
+source("/Users/gdunlap/Desktop/Rao_Lab/AMP_Phase_2/manuscript/AMP_manuscript_functions.R")
+
+
+setwd("/Rao_Lab/AMP_Phase_2/manuscript/analysis/")
+
+load("20220319_AMP_initialclusterings.RData") #product of tcellprep
+
+rm(initialCD4)
+
+Idents(clust_30PC_res03_seurat_Tcells) <- rownames(clust_30PC_res03_seurat_Tcells@meta.data)
+finalCD4 <- subset(clust_30PC_res03_seurat_Tcells, idents = c(CD4cells_fromCD4, CD4cells_fromCD8, CD4cells_frominnate, CD4cells_fromprolif))
+Idents(finalCD4) <- finalCD4$seurat_clusters
+
+finalCD4$tissue_source <- factor(finalCD4$tissue_source, levels = c("SYN", "PBL"))
+finalCD4$sampleTissue_Pub <- factor(finalCD4$sampleTissue_Pub, levels = c("RA01_SYN", "RA01_PBL", "RA02_SYN", "RA02_PBL", "RA03_SYN", "RA03_PBL", "RA04_SYN", "RA04_PBL", "RA05_SYN", "RA05_PBL", "RA06_SYN", "RA06_PBL", "RA07_SYN", "RA07_PBL", "RA08_SYN", "RA09_SYN", "RA10_SYN", "RA10_PBL", "RA11_SYN", "RA11_PBL", "RA12_SYN", "RA12_PBL"))
+
+Idents(finalCD4) <- finalCD4$seurat_clusters
+
+finalCD4 <- NormalizeData(finalCD4, normalization.method = "LogNormalize", scale.factor = 10000)
+finalCD4 <- FindVariableFeatures(finalCD4, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(finalCD4), 10)
+
+all.genes <- rownames(finalCD4)
+finalCD4 <- ScaleData(finalCD4, features = all.genes)
+finalCD4 <- RunPCA(finalCD4, features = VariableFeatures(object = finalCD4))
+
+dims_use = 1:40
+finalCD4 <- RunHarmony(finalCD4, group.by.vars=c("sample_ID_Pub", "tissue_source"))
+finalCD4 <- RunUMAP(object=finalCD4, reduction="harmony", dims=dims_use, verbose=FALSE)
+finalCD4 <- FindNeighbors(object=finalCD4, reduction="harmony", dims=dims_use, verbose=FALSE)
+finalCD4 <- FindClusters(object=finalCD4, resolution=0.5, verbose=FALSE)
+
+VlnPlot(finalCD4, features = c("CXCL13", "FOXP3"))
+
+finalCD4 <- FindSubCluster(finalCD4, "2", resolution = 0.2,  graph.name = "RNA_nn")
+
+finalCD4$seurat_clusters <- finalCD4$sub.cluster
+Idents(finalCD4) <- finalCD4$seurat_clusters
+
+finalCD4 <- FindSubCluster(finalCD4, "4", resolution = 0.2,  graph.name = "RNA_nn")
+finalCD4$seurat_clusters <- finalCD4$sub.cluster
+finalCD4 <- subset(finalCD4, subset = seurat_clusters == "4_2", invert = T)
+Idents(finalCD4) <- finalCD4$seurat_clusters
+
+cd4tcellcount_add <- finalCD4@meta.data %>% group_by(sampleTissue_Pub) %>% add_tally(name = "sample_cd4tcellcount")
+finalCD4$cd4tcellCount <- cd4tcellcount_add$sample_cd4tcellcount
+
+cd4cols <- c(colorRampPalette(brewer.pal(10, "Paired"))(14))
+
+DimPlot(finalCD4, label = T, repel = T) + 
+  scale_color_manual(values = cd4cols)
+
+CD4Tcell_markers <- FindAllMarkers(object=finalCD4, only.pos = FALSE, logfc.threshold = 0.40, min.pct = 0.40)
+
+DotPlot(finalCD4, features = c("CD3E", "CD4", "SELL", "LEF1", "TCF7", "CD69", "IL7R", "FOS", "JUNB", "NR4A2", "EGR1", "AREG", "GZMK", "GZMA", "CCL5", "CCL4", "CXCL13", "MAF", "TIGIT", "TOX", "PDCD1", "CTLA4", "LAG3", "TNFRSF4", "TNFRSF18", "FOXP3", "IL32", "IFNG", "PRF1", "GZMB", "IFI44L", "MX1", "CD8A", "MALAT1", "IGKC")) + 
+  RotatedAxis() + 
+  xlab(NULL) + ylab(NULL) + 
+  scale_color_distiller(palette = "Reds", direction = 1)
+
+StackedVlnPlot(finalCD4, features = c("CD3E", "CD4", "SELL", "LEF1", "TCF7", "CD69", "IL7R", "FOS", "JUNB", "NR4A2", "EGR1", "AREG", "GZMK", "GZMA", 
+                                      "CCL5", "CCL4", "CXCL13", "MAF", "TIGIT", "TOX",
+                                      "PDCD1", "CTLA4", "LAG3", "TNFRSF4", "TNFRSF18", "FOXP3",
+                                      "IL32", "IFNG", "PRF1", "GZMB", "IFI44L", "MX1", "MALAT1"), cols = cd4cols)
+
+Idents(finalCD4) <- finalCD4$seurat_clusters
+current.cluster.ids <- c(0, 1, 10, 11,"2_0", "2_1", 3,"4_0", "4_1", 5, 6, 7, 8, 9)
+new.cluster.ids <- c("Naive", "CCR7+ memory", "ISG-high", "Proliferating", "Tfh/Tph", "Tph", "IL7R+CCL5+ memory", "CD25-high Treg", "CD25-low Treg", "MT-high", "GIMAP+ naive/memory", "GZMA+CCL5+ memory", "GNLY+", "GZMK+ memory")
+finalCD4@active.ident <- plyr::mapvalues(x = finalCD4@active.ident, from = current.cluster.ids, to = new.cluster.ids)
+finalCD4$clusters_names <- finalCD4@active.ident
+
+finalCD4$clusters_names <- factor(finalCD4$clusters_names, levels = c("Naive", "GIMAP+ naive/memory", "CCR7+ memory", "IL7R+CCL5+ memory", "GZMA+CCL5+ memory", "GZMK+ memory", "Tfh/Tph", "Tph", "CD25-low Treg", "CD25-high Treg", "GNLY+", "ISG-high", "Proliferating", "MT-high"))
+Idents(finalCD4) <- finalCD4$clusters_names
+
+CD4Tcell_markers <- FindAllMarkers(object=finalCD4, only.pos = FALSE, logfc.threshold = 0.40, min.pct = 0.40)
+write.csv(CD4Tcell_markers, "finalcd4tcellclustermarker_res0.5.csv")
+
+finalCD4$cdai_cat <- ifelse(finalCD4$cdai_V0 < 10, "Low",
+                                   ifelse(finalCD4$cdai_V0 > 22.1, "Severe (CDAI > 22)", "Moderate (10 < CDAI <= 22)"))
+
+DimPlot(finalCD4) + 
+  scale_color_manual(values = cd4cols, name = "CD4+ T Cell Clusters") +
+  ggtitle(NULL) + xlab("UMAP 1") + ylab("UMAP 2") +
+  theme(legend.text = element_text(size=10),
+        legend.key.size = unit(0.35, 'cm'),
+        legend.title = element_text(size=10, face="bold"))
+ggsave("CD4_UMAP_namedclusters.eps", width = 5.5, height = 3.5)
+
+StackedVlnPlot(finalCD4, features = c("CD3E", "CD4", "SELL", "CCR7", "TCF7", "CD69", "IL7R", "GIMAP5", "CCL5", "CCL4","GZMK", "GZMA", 
+                                      "CXCL13", "MAF", "TIGIT", "PDCD1", "CTLA4", "LAG3", "FOXP3", "IL2RA", 
+                                      "IL32", "GNLY", "PRF1", "GZMB", "IFI44L", "MX1", "MKI67", "MALAT1"), cols = cd4cols)
+ggsave("CD4_stackedVln_markers_namedclusters.eps", width = 4, height = 6)
+
+DotPlot(finalCD4, features = rev(c("CD3E", "CD4", "SELL", "CCR7", "TCF7", "CD69", "IL7R", "GIMAP7", "CCL5", "CCL4","GZMK", "GZMA", 
+                                   "CXCL13", "MAF", "TIGIT", "PDCD1", "CTLA4", "LAG3", "FOXP3", "IL2RA",
+                                   "IL32", "GNLY", "PRF1", "GZMB", "IFI44L", "MX1", "MKI67", "MALAT1")), group.by = "clusters_names") + 
+  coord_flip() + 
+  RotatedAxis() + 
+  xlab(NULL) + ylab(NULL) + 
+  scale_color_distiller(palette = "Reds", direction = 1) +
+  theme(legend.text = element_text(size=10),
+        legend.title = element_text(size=12),
+        axis.text = element_text(size = 10))
+ggsave("CD4_dotplot_markers_namedclusters.eps", width = 6, height = 7)
+
+#symphony- loading in main pipeline Phase 2 T cell data
+tcell_RNA <- readRDS("/Users/gdunlap/Desktop/Rao_Lab/AMP_Phase_2/data/mainPipeline/mRNA_counts_tcell_pass_QC.rds")
+tcell_ADT <- readRDS("/Users/gdunlap/Desktop/Rao_Lab/AMP_Phase_2/data/mainPipeline/protein_counts_tcell_pass_QC.rds")
+tcell_meta <- readRDS("/Users/gdunlap/Desktop/Rao_Lab/AMP_Phase_2/data/mainPipeline/meta_tcell_pass_QC.rds")
+rownames(tcell_meta) <- tcell_meta$cell
+
+AMP_phase2main_T <- CreateSeuratObject(tcell_RNA)
+AMP_phase2main_T[["ADT"]] <- CreateAssayObject(tcell_ADT)
+
+AMP_phase2main_T <- AddMetaData(AMP_phase2main_T, tcell_meta)
+Idents(AMP_phase2main_T) <- AMP_phase2main_T$new_cluster_number
+
+AMP_phase2main_T_cd4 <- subset(AMP_phase2main_T, idents = c(15,13,14,17,23,21,16,20,22), invert = T)
+
+Idents(AMP_phase2main_T_cd4) <- AMP_phase2main_T_cd4$new_cluster_name
+AMP_phase2main_T_cd4$new_cluster_name <- ifelse(AMP_phase2main_T_cd4$new_cluster_name == "T-7: CD4+ IFNG+ Tph/Tfh", "T-7: CD4+ Tph", 
+                                                ifelse(AMP_phase2main_T_cd4$new_cluster_name == "T-3: CD4+ IFNG- Tph/Tfh", "T-3: CD4+ Tfh/Tph", AMP_phase2main_T_cd4$new_cluster_name))
+
+AMP_phase2main_T_cd4 <- NormalizeData(AMP_phase2main_T_cd4, normalization.method = "LogNormalize", scale.factor = 10000)
+
+AMP_phase2main_T_cd4$new_cluster_name <- factor(AMP_phase2main_T_cd4$new_cluster_name, levels = c("T-4: CD4+ naive", "T-0: CD4+ IL7R+ memory", "T-1: CD4+ CD161+ memory", "T-2: CD4+ IL7R+CCR5+ memory", "T-5: CD4+ GZMK+ memory", "T-10: CD4+ OX40+NR3C1+", "T-11: CD4+ CD146+ memory", "T-6: CD4+ memory", "T-3: CD4+ Tfh/Tph", "T-7: CD4+ Tph", "T-9: CD4+ CD25-low Treg", "T-8: CD4+ CD25-high Treg", "T-12: CD4+ GNLY+", "T-18: Proliferating", "T-19: MT-high (low quality)"))
+Idents(AMP_phase2main_T_cd4) <- AMP_phase2main_T_cd4$new_cluster_name
+
+symphT_reference <- symphony::buildReference(
+  AMP_phase2main_T_cd4@assays$RNA@data,
+  AMP_phase2main_T_cd4@meta.data,
+  vars = c('sample'),         # variables to integrate over
+  K = 100,                   # number of Harmony clusters
+  verbose = TRUE,            # verbose output
+  do_umap = FALSE,            # can set to FALSE if want to run umap separately later
+  do_normalize = FALSE,      # set to TRUE if input counts are not normalized yet
+  vargenes_method = 'vst',   # method for variable gene selection ('vst' or 'mvp')
+  #vargenes_groups = 'new_cluster_name', # metadata column specifying groups for variable gene selection 
+  topn = 2000,               # number of variable genes to choose per group
+  d = 20                     # number of PCs
+)
+
+#map CD4s onto main pipeline
+queryT <- mapQuery(finalCD4@assays$RNA@data,             # query gene expression (genes x cells)
+                   finalCD4@meta.data,        # query metadata (cells x attributes)
+                   symphT_reference,             # Symphony reference object
+                   vars = NULL,           # Query batch variables to harmonize over (NULL treats query as one batch)
+                   do_normalize = FALSE,  # perform log(CP10k) normalization on query (set to FALSE if already normalized)
+                   do_umap = FALSE)        # project query cells into reference UMAP
+
+queryT <- knnPredict(queryT, symphT_reference, train_labels = symphT_reference$meta_data$new_cluster_name,
+                     k = 10, save_as = 'cell_type_10_nn', confidence = TRUE)
+
+finalCD4$symphony_narrow_type <- queryT$meta_data$cell_type_10_nn
+
+#Cell type mappings heatmap
+query_immune = queryT$meta_data
+query_immune$symphony_narrow_type = droplevels(as.factor(query_immune$cell_type_10_nn))
+res_immune = symphony:::evaluate(query_immune$clusters_names, query_immune$cell_type_10_nn)
+Conf_immune = res_immune$Conf / rowSums(res_immune$Conf)
+
+dev.off()
+setEPS(width = 12, height = 8)
+postscript("CD4_symphony_mainPipeline.eps")
+pheatmap::pheatmap(Conf_immune, cluster_rows = F, cluster_cols = F, angle_col = c("45"), cellwidth = 20, cellheight = 20, color=colorRampPalette(c("white", "#962f23", "#5e0e04"))(1000), border_color = "white")
+dev.off()
+
+#pseudobulk heatmap
+col_cor = colorRamp2(c(1, 0), c("#5e0e04", "white"))
+pseudobulk_byCD4cluster <- AverageExpression(finalCD4, group.by = "clusters_names")
+cor.exp <- cor(pseudobulk_byCD4cluster$RNA)
+Heatmap(as.matrix(cor.exp), col = col_cor)
+
+#gene signatures
+cd4signatures <- read.csv("~/Desktop/Rao_Lab/AMP_Phase_2/manuscript/cd4_signatures.csv")
+mito.genes <- grep(pattern = "^MT-", x = rownames(x = finalCD4@assays$RNA@data), value = TRUE)
+
+finalCD4 <- AddModuleScore(finalCD4, list(cd4signatures$Naive), name = "Naive_sig", ctrl = 1000)
+finalCD4 <- AddModuleScore(finalCD4, list(cd4signatures$TCR), name = "TCR_sig", ctrl = 1000)
+finalCD4 <- AddModuleScore(finalCD4, list(cd4signatures$Effectorness), name = "Effector_sig", ctrl = 1000)
+finalCD4 <- AddModuleScore(finalCD4, list(cd4signatures$Cytotoxicity), name = "Cytotoxicity_sig", ctrl = 1000)
+finalCD4 <- AddModuleScore(finalCD4, list(cd4signatures$ISG), name = "ISG_sig", ctrl = 1000)
+finalCD4 <- AddModuleScore(finalCD4, list(cd4signatures$Proliferation), name = "Proliferation_sig", ctrl = 1000)
+finalCD4 <- AddModuleScore(finalCD4, list(cd4signatures$Tfh), name = "Tfh_sig", ctrl = 1000)
+finalCD4 <- AddModuleScore(finalCD4, list(cd4signatures$Th17), name = "Th17_sig", ctrl = 1000)
+finalCD4 <- AddModuleScore(finalCD4, list(mito.genes), name = "Mitochondrial_sig", ctrl = 1000)
+finalCD4 <- AddModuleScore(finalCD4, list(cd4signatures$Activation), name = "Activation_sig", ctrl = 1000)
+
+cd4signatures_cluster <- finalCD4@meta.data %>% 
+  group_by(clusters_names) %>% 
+  summarise_all(mean) %>% 
+  select(clusters_names, Naive_sig1:Tfh_sig1, Mitochondrial_sig1:Activation_sig1)
+
+names(cd4signatures_cluster) <- c("clusters_names", "Naive", "TCR", "Effector", "Cytotoxicity", "ISG", "Proliferation", "Tfh", "Mito", "Activation")
+
+cd4signatures_cluster$clusters_names <- NULL
+cd4signatures_cluster <- as.matrix(cd4signatures_cluster)
+rownames(cd4signatures_cluster) <- levels(finalCD4$clusters_names)
+cd4signatures_cluster <- scale(cd4signatures_cluster)
+
+col_fun = colorRamp2(c(2, 0, -2), c("#5e0e04", "white", "lightgrey"))
+col_fun(seq(-3, 3))
+
+cd4sigheatmap <- Heatmap(t(cd4signatures_cluster), cluster_columns = F, cluster_rows = F, col = col_fun,
+        heatmap_legend_param = list(title = NULL), column_names_rot = 45, column_names_centered = F, column_names_gp = gpar(fontsize = 9), row_names_gp = gpar(fontsize = 9),
+        row_order = c("Naive", "TCR", "Activation", "Tfh", "Effector", "Cytotoxicity", "ISG", "Proliferation", "Mito"),
+        width = ncol(cd4signatures_cluster)*unit(8, "mm"), 
+        height = nrow(cd4signatures_cluster)*unit(3, "mm"), rect_gp = gpar(col = "white", lwd = 0.5))
+
+setEPS()
+postscript("cd4_heatmap_signatures_byCluster.eps", width = 6, height = 5)
+draw(cd4sigheatmap)
+dev.off()
+
+#heatmap::pheatmap(t(signatures_cluster), scale = "row", cluster_rows = F, cluster_cols = F, angle_col = c("45"), cellwidth = 20, cellheight = 20, color=colorRampPalette(c("lightgrey","white", "#7D190E"))(1000))
+
+a <- FeaturePlot(finalCD4, features = c("Naive_sig1"), order = T) + ggtitle("Naive") +
+  scale_color_gradientn(colors = rev(c("#5e0e04", "white", "lightgrey"))) +
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+b <- FeaturePlot(finalCD4, features = c("TCR_sig1"), order = T) + ggtitle("TCR Signaling") +
+  scale_color_gradientn(colors = rev(c("#5e0e04", "white", "lightgrey"))) +
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+c <- FeaturePlot(finalCD4, features = c("Activation_sig1"), order = T) + ggtitle("Activation") +
+  scale_color_gradientn(colors = rev(c("#5e0e04", "white", "lightgrey"))) +
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+d <- FeaturePlot(finalCD4, features = c("Tfh_sig1"), order = T) + ggtitle("Tfh") +
+  scale_color_gradientn(colors = rev(c("#5e0e04", "white", "lightgrey"))) +
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+
+e <- FeaturePlot(finalCD4, features = c("Effector_sig1"), order = T) + ggtitle("Effector") +
+  scale_color_gradientn(colors = rev(c("#5e0e04", "white", "lightgrey"))) +
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+f <- FeaturePlot(finalCD4, features = c("Cytotoxicity_sig1"), order = T) + ggtitle("Cytotoxicity") +
+  scale_color_gradientn(colors = rev(c("#5e0e04", "white", "lightgrey"))) +
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+g <- FeaturePlot(finalCD4, features = c("ISG_sig1"), order = T) + ggtitle("ISG") +
+  scale_color_gradientn(colors = rev(c("#5e0e04", "white", "lightgrey"))) +
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+h <- FeaturePlot(finalCD4, features = c("Proliferation_sig1"), order = T) + ggtitle("Proliferation") +
+  scale_color_gradientn(colors = rev(c("#5e0e04", "white", "lightgrey"))) +
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+i <- FeaturePlot(finalCD4, features = c("Mitochondrial_sig1"), order = T) + ggtitle("Mitochondrial") +
+  scale_color_gradientn(colors = rev(c("#5e0e04", "white", "lightgrey"))) +
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+(a | d | e) / (f | g | h) / (i | b | c)
+ggsave("cd4_umap_signatures.png", width = 5.5, height = 6)
+             
+cd4sig_legend <- FeaturePlot(finalCD4, features = c("Mitochondrial_sig1"), order = T) + ggtitle("Mitochondrial") +
+  scale_color_gradientn(colors = rev(c("#5e0e04", "white", "lightgrey")), labels = c("Min", "Max"), breaks = c(-0.5,4.2))    
+
+plot_grid(get_legend(cd4sig_legend))
+ggsave("cd4_signatures_genericLegend.eps")
+
+#synovial vs blood skewing
+cd4metadata <- finalCD4@meta.data
+
+cd4clusterbytissue <- cd4metadata %>% 
+  group_by(clusters_names, sampleTissue_Pub) %>% 
+  add_tally(name = "patientcd4clustersize") %>% 
+  ungroup() %>%
+  select(sample_ID_Pub, tissue_source, clusters_names, totalcellCount, tcellCount, cd4tcellCount, patientcd4clustersize) %>%
+  distinct(sample_ID_Pub, tissue_source, clusters_names, .keep_all = T) %>%
+  mutate(freqcd4 = patientcd4clustersize / cd4tcellCount) %>%
+  mutate(freqT = patientcd4clustersize / tcellCount)
+
+#by cd4 T cells
+stat.test_freqcd4 <- cd4clusterbytissue %>%
+  group_by(clusters_names) %>%
+  pairwise_t_test(freqcd4 ~ tissue_source) %>%
+  add_significance()
+
+stat.test_freqcd4 <- stat.test_freqcd4 %>% add_xy_position(x = "tissue_source")
+
+ggplot(cd4clusterbytissue, aes(x = tissue_source, y = freqcd4)) +
+  geom_line(aes(group = sample_ID_Pub)) +
+  geom_point(aes(color = tissue_source)) + facet_wrap(~ clusters_names) + theme_classic() + ylim(0,1) +
+  scale_color_manual(values = c("#f2a21e", "#88a0c4")) + theme(legend.position = "none") + xlab(NULL) +
+  ylab("Frequency of CD4 subcluster in all CD4 cells, per patient") + stat_pvalue_manual(stat.test_freqcd4, label = "p.adj")
+ggsave("CD4_clusterfrequencyCD4denom_byTissue.eps", width = 7, height = 6)
+
+#by all T cells
+stat.test_freqallT <- cd4clusterbytissue %>%
+  group_by(clusters_names) %>%
+  pairwise_t_test(freqT ~ tissue_source) %>%
+  add_significance()
+
+stat.test_freqallT <- stat.test_freqallT %>% add_xy_position(x = "tissue_source")
+
+ggplot(cd4clusterbytissue, aes(x = tissue_source, y = freqT)) +
+  geom_line(aes(group = sample_ID_Pub)) +
+  geom_point(aes(color = tissue_source)) + facet_wrap(~clusters_names) + theme_classic() + ylim(0,1) +
+  scale_color_manual(values = c("#f2a21e", "#88a0c4")) + theme(legend.position = "none") + xlab(NULL) +
+  ylab("Frequency of CD4 subcluster in all T cells, per patient") + stat_pvalue_manual(stat.test_freqallT, label = "p.adj")
+ggsave("CD4_clusterfrequencyTcelldenom_byTissue.eps", width = 7, height = 6)
+
+#get mean, min, and max percent across samples of chosen tissue for chosen cluster
+cd4clusterbytissue %>%
+  group_by(clusters_names) %>% filter(tissue_source == "PBL") %>% 
+  filter(clusters_names == "Naive") %>% select(freqcd4) %>% 
+  mutate(mean = mean(freqcd4)) %>% 
+  mutate(min = min(freqcd4)) %>% mutate(max = max(freqcd4))
+
+
+
+#distribution by cluster and tissue source
+DimPlot(finalCD4, group.by = "tissue_source", shuffle = T) +
+  scale_color_manual(values = c("#f2a21e", "#88a0c4"), name = NULL, labels = c("SYN", "PBL")) +
+  ggtitle(NULL) + xlab("UMAP 1") + ylab("UMAP 2") + 
+  theme(legend.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank())
+ggsave("CD4_UMAP_byTissue.eps", width = 4, height = 3)
+
+Idents(finalCD4) <- finalCD4$tissue_source
+DimPlot(finalCD4, cells.highlight = WhichCells(finalCD4, idents = "SYN"), 
+        cols.highlight = c("#f2a21e"), sizes.highlight = 0.1, cols = "gray80") +
+  ggtitle("SYN") + xlab("UMAP 1") + ylab("UMAP 2") + 
+  theme(legend.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5, size = 11))
+ggsave("CD4_UMAP_SYN_highlight.eps", width = 3, height = 3)
+
+DimPlot(finalCD4, cells.highlight = WhichCells(finalCD4, idents = "PBL"), 
+        cols.highlight = c("#88a0c4"), sizes.highlight = 0.1, cols = "gray80") +
+  ggtitle("PBL") + xlab("UMAP 1") + ylab("UMAP 2") + 
+  theme(legend.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5, size = 11))
+ggsave("CD_UMAP_PBL_highlight.eps", width = 3, height = 3)
+
+finalCD4$tissue_cluster <- paste0(finalCD4$tissue_source, "_", finalCD4$clusters_names)
+Idents(finalCD4) <- finalCD4$tissue_cluster
+
+DimPlot(finalCD4, cells.highlight = list(WhichCells(finalCD4, idents = "SYN_Naive"), 
+                                         WhichCells(finalCD4, idents = "SYN_GIMAP+ naive/memory"), 
+                                         WhichCells(finalCD4, idents = "SYN_CCR7+ memory"), 
+                                         WhichCells(finalCD4, idents = "SYN_IL7R+CCL5+ memory"), 
+                                         WhichCells(finalCD4, idents = "SYN_GZMA+CCL5+ memory"), 
+                                         WhichCells(finalCD4, idents = "SYN_GZMK+ memory"), 
+                                         WhichCells(finalCD4, idents = "SYN_Tfh/Tph"), 
+                                         WhichCells(finalCD4, idents = "SYN_Tph"), 
+                                         WhichCells(finalCD4, idents = "SYN_CD25-low Treg"), 
+                                         WhichCells(finalCD4, idents = "SYN_CD25-high Treg"), 
+                                         WhichCells(finalCD4, idents = "SYN_GNLY+"), 
+                                         WhichCells(finalCD4, idents = "SYN_ISG-high"), 
+                                         WhichCells(finalCD4, idents = "SYN_Proliferating"), 
+                                         WhichCells(finalCD4, idents = "SYN_MT-high")), 
+        cols.highlight = rev(cd4cols), sizes.highlight = 0.05, cols = "gray80") +
+  scale_color_manual(breaks = c("Group_1", "Group_2", "Group_3", "Group_4", "Group_5", "Group_6", "Group_7", "Group_8", "Group_9", "Group_10", "Group_11", "Group_12", "Group_13", "Group_14", "Unselected"), 
+                     labels = c("SYN_Naive", "SYN_GIMAP+ naive/memory", "SYN_CCR7+ memory", "SYN_IL7R+CCL5+ memory", "SYN_GZMA+CCL5+ memory", "SYN_GZMK+ memory", "SYN_Tfh/Tph", "SYN_Tph", "SYN_CD25-low Treg", "SYN_CD25-high Treg", "SYN_GNLY+", "SYN_ISG-high", "SYN_Proliferating", "SYN_MT-high", "Unselected"), 
+                     values = c(cd4cols, "gray90")) +
+  ggtitle("SYN") + xlab("UMAP 1") + ylab("UMAP 2") + 
+  theme(legend.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5, size = 11))
+ggsave("CD4_UMAP_SYN_highlight_clusters.eps", width = 3, height = 3)
+
+DimPlot(finalCD4, cells.highlight = list(WhichCells(finalCD4, idents = "PBL_Naive"), 
+                                         WhichCells(finalCD4, idents = "PBL_GIMAP+ naive/memory"), 
+                                         WhichCells(finalCD4, idents = "PBL_CCR7+ memory"), 
+                                         WhichCells(finalCD4, idents = "PBL_IL7R+CCL5+ memory"), 
+                                         WhichCells(finalCD4, idents = "PBL_GZMA+CCL5+ memory"), 
+                                         WhichCells(finalCD4, idents = "PBL_GZMK+ memory"), 
+                                         WhichCells(finalCD4, idents = "PBL_Tfh/Tph"), 
+                                         WhichCells(finalCD4, idents = "PBL_Tph"), 
+                                         WhichCells(finalCD4, idents = "PBL_CD25-low Treg"), 
+                                         WhichCells(finalCD4, idents = "PBL_CD25-high Treg"), 
+                                         WhichCells(finalCD4, idents = "PBL_GNLY+"), 
+                                         WhichCells(finalCD4, idents = "PBL_ISG-high"), 
+                                         WhichCells(finalCD4, idents = "PBL_Proliferating"), 
+                                         WhichCells(finalCD4, idents = "PBL_MT-high")), 
+        cols.highlight = rev(cd4cols), sizes.highlight = 0.05, cols = "gray80") +
+  scale_color_manual(breaks = c("Group_1", "Group_2", "Group_3", "Group_4", "Group_5", "Group_6", "Group_7", "Group_8", "Group_9", "Group_10", "Group_11", "Group_12", "Group_13", "Group_14", "Unselected"), 
+                     labels = c("PBL_Naive", "PBL_GIMAP+ naive/memory", "PBL_CCR7+ memory", "PBL_IL7R+CCL5+ memory", "PBL_GZMA+CCL5+ memory", "PBL_GZMK+ memory", "PBL_Tfh/Tph", "PBL_Tph", "PBL_CD25-low Treg", "PBL_CD25-high Treg", "PBL_GNLY+", "PBL_ISG-high", "PBL_Proliferating", "PBL_MT-high", "Unselected"), 
+                     values = c(cd4cols, "gray90")) +
+  ggtitle("PBL") + xlab("UMAP 1") + ylab("UMAP 2") + 
+  theme(legend.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5, size = 11))
+ggsave("CD4_UMAP_PBL_highlight_clusters.eps", width = 3, height = 3)
+Idents(finalCD4) <- finalCD4$clusters_names
+
+finalCD4@meta.data %>%
+  group_by(clusters_names, tissue_source) %>%
+  dplyr::count() %>%
+  group_by(clusters_names) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=clusters_names,y=Percent, fill=tissue_source)) +
+  geom_col() +
+  scale_fill_manual(values = c("#f2a21e", "#88a0c4"), name = "Source", labels = c("SYN", "PBL")) +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  labs(fill = "Sample") +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm')) 
+ggsave("CD4_barplot_tissueBreakdown_percent.eps", width = 7, height = 3)
+
+#clonality by cluster
+
+finalCD4$clonal <- replace_na(finalCD4$clonal, "No TCR")
+
+finalCD4@meta.data %>%
+  group_by(clusters_names, cloneType) %>%
+  dplyr::count() %>%
+  group_by(clusters_names) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=clusters_names,y=Percent, fill=cloneType)) +
+  geom_col() +
+  scale_fill_brewer(palette = "Blues", direction = -1, name = "Clone Type") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm')) 
+ggsave("CD4_barplot_clonality_percent.eps", width = 7, height = 3)
+
+DimPlot(finalCD4, group.by = "cloneType", shuffle = T) + 
+  scale_color_brewer(palette = "Blues", direction = -1) +
+  ggtitle(NULL) + xlab("UMAP 1") + ylab("UMAP 2") +
+  theme(legend.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank())
+ggsave("CD4_UMAP_clonality.eps", width = 5, height = 3)
+
+finalCD4@meta.data %>%
+  group_by(clusters_names, cloneType) %>%
+  dplyr::count() %>%
+  group_by(cloneType) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=cloneType,y=Percent, fill=clusters_names)) +
+  geom_col() +
+  scale_fill_manual(values = cd4cols) +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+        axis.text.y = element_text(size = 10),
+        legend.text = element_text(size=9),
+        legend.title = element_blank(),
+        legend.key.size = unit(0.35, 'cm'),
+        plot.margin = margin(10, 10, 10, 50)) 
+ggsave("CD4_barplot_cloneType_clusterBreakdown.eps", width = 5, height = 4)
+
+finalCD4@meta.data %>%
+  group_by(clusters_names, clonal) %>%
+  dplyr::count() %>%
+  group_by(clonal) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=clonal,y=Percent, fill=clusters_names)) +
+  geom_col() +
+  scale_fill_manual(values = cd4cols) +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  scale_x_discrete(limits = c("Yes", "No", "No TCR"), labels = c("Clonal", "Not Clonal", "No TCR")) +
+  ggtitle(NULL) +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+        axis.text.y = element_text(size = 10),
+        legend.text = element_text(size=9),
+        legend.title = element_blank(),
+        legend.key.size = unit(0.35, 'cm')) 
+ggsave("CD4_barplot_clonal_clusterBreakdown.eps", width = 3.5, height = 3)
+
+#distribution by sample ID and tissue
+finalCD4@meta.data %>%
+  group_by(sampleTissue_Pub, clusters_names) %>%
+  dplyr::count() %>%
+  group_by(sampleTissue_Pub) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=sampleTissue_Pub,y=Percent, fill=clusters_names)) +
+  geom_col() +
+  scale_fill_manual(values = cd4cols, name = "Cluster") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  labs(fill = "Sample") +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm')) 
+ggsave("CD4_barplot_patientSampleBreakdown_percent.eps", width = 6, height = 3)
+
+finalCD4@meta.data %>%
+  group_by(sampleTissue_Pub, clusters_names) %>%
+  dplyr::count() %>%
+  group_by(sampleTissue_Pub) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=sampleTissue_Pub,y=n, fill=clusters_names)) +
+  geom_col() +
+  scale_fill_manual(values = cd4cols, name = "Cluster") +
+  ggtitle(NULL) +
+  ylab("Number of Cells") +
+  xlab(NULL) + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm')) 
+ggsave("CD4_barplot_patientSampleBreakdown_number.eps", width = 6.1, height = 3)
+
+cd4_p2 <- finalCD4@meta.data %>%
+  group_by(clusters_names, tissue_source) %>%
+  dplyr::count() %>%
+  group_by(clusters_names) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=clusters_names,y=Percent, fill=tissue_source)) +
+  geom_col() +
+  scale_fill_manual(values = c("#f2a21e", "#88a0c4"), name = "Source", labels = c("SYN", "PBL")) +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  labs(fill = "Sample") +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm')) 
+
+cd4_p1 <- finalCD4@meta.data %>%
+  group_by(clusters_names, sort_group) %>%
+  dplyr::count() %>%
+  group_by(clusters_names) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=clusters_names,y=n, fill = clusters_names)) +
+  geom_col() +
+  scale_fill_manual(name = NULL, values = cd4cols) +
+  scale_y_continuous(limits = c(0,10000)) +
+  ggtitle(NULL) +
+  labs(fill = "Sample") +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10)) 
+
+cd4_p3 <- finalCD4@meta.data %>%
+  group_by(clusters_names, cloneType) %>%
+  dplyr::count() %>%
+  group_by(clusters_names) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=clusters_names,y=Percent, fill=cloneType)) +
+  geom_col() +
+  scale_fill_brewer(palette = "Blues", direction = -1, name = "Clone Type") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  ylab(NULL) +
+  xlab(NULL) + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm')) 
+
+cd4plotalign <- align_plots(cd4_p1, cd4_p2, cd4_p3, align="hv", axis="tblr")
+cd4_p1x <- ggdraw(cd4plotalign[[1]])
+cd4_p2x <- ggdraw(cd4plotalign[[2]])
+cd4_p3x <- ggdraw(cd4plotalign[[3]])
+
+save_plot("CD4_barplot_numberCells_aligned.eps", cd4_p1x, base_width = 7, base_height = 2.2)
+save_plot("CD4_barplot_TissueDist_aligned.eps", cd4_p2x, base_width = 7, base_height = 2.2)
+save_plot("CD4_barplot_clonality_aligned.eps", cd4_p3x, base_width = 7, base_height = 2.2)
+
+finalCD4_tph_tfh <- subset(finalCD4, idents = c("Tph", "Tfh/Tph"))
+finalCD4_tph_tfh$cluster_tissue <- paste0(finalCD4_tph_tfh$clusters_names, "_", finalCD4_tph_tfh$tissue_source)
+
+finalCD4_tph_tfh_clonal <- subset(finalCD4_tph_tfh, subset = clonal == c("Yes"))
+finalcd4tfhtphclonal_tcrbycluster <- expression2List(finalCD4_tph_tfh_clonal, group = "cluster_tissue")
+
+clonalOverlap(finalcd4tfhtphclonal_tcrbycluster, cloneCall = "aa", method = "morisita") +
+  scale_fill_distiller(palette = "Reds", direction = 1, na.value = "white", name = "Morisita \nOverlap") + theme(axis.text.x = element_text(angle = 45, hjust = 1),
+                                                                                                                 legend.text = element_text(size=9),
+                                                                                                                 legend.title = element_text(size = 10),
+                                                                                                                 legend.key.size = unit(0.35, 'cm'),
+                                                                                                                 text = element_text(size=10))
+
+
+finalCD4_SYN <- subset(finalCD4, subset = tissue_source  == "SYN")
+finalcd4syn_tcrbycluster <- expression2List(finalCD4_SYN, group = "clusters_names")
+clonalOverlap(finalcd4syn_tcrbycluster, cloneCall = "aa", method = "morisita") +
+  scale_fill_distiller(palette = "Reds", direction = 1, na.value = "white", name = "Morisita \nOverlap") + theme(axis.text.x = element_text(angle = 45, hjust = 1),
+                                                                                                                 legend.text = element_text(size=9),
+                                                                                                                 legend.title = element_text(size = 10),
+                                                                                                                 legend.key.size = unit(0.35, 'cm'),
+                                                                                                                 text = element_text(size=10))
+
+finalcd4syn_morisita <- clonalOverlap(finalcd4syn_tcrbycluster, cloneCall = "aa", method = "morisita", exportTable = T)
+finalcd4syn_morisita$names <- NULL
+finalcd4syn_morisita <- as.matrix(finalcd4syn_morisita)
+finalcd4syn_morisita <- Matrix::forceSymmetric(finalcd4syn_morisita,uplo="U")
+finalcd4syn_morisita <- as.matrix(finalcd4syn_morisita)
+cd4synOverlapheatmap <- Heatmap(finalcd4syn_morisita, cluster_columns = F, cluster_rows = F, 
+        col = colorRampPalette(c("white", "#f2a21e"))(1000),
+        heatmap_legend_param = list(title = "Tissue \nMorisita \nOverlap"), column_order = levels(finalCD4$clusters_names), row_order = levels(finalCD4$clusters_names),
+        column_names_rot = 45, column_names_centered = F, column_names_gp = gpar(fontsize = 8), row_names_gp = gpar(fontsize = 8),
+        width = ncol(cd4signatures_cluster)*unit(10, "mm"), 
+        height = nrow(cd4signatures_cluster)*unit(3, "mm"), 
+        rect_gp = gpar(col = "white", lwd = 0.5))
+
+setEPS()
+postscript("cd4_SYN_heatmap_clonalOverlap_byCluster.eps", width = 7, height = 5)
+draw(cd4synOverlapheatmap)
+dev.off()
+
+finalCD4_PBL <- subset(finalCD4, subset = tissue_source  == "PBL")
+finalcd4pbl_tcrbycluster <- expression2List(finalCD4_PBL, group = "clusters_names")
+clonalOverlap(finalcd4pbl_tcrbycluster, cloneCall = "aa", method = "morisita") +
+  scale_fill_distiller(palette = "Reds", direction = 1, na.value = "white", name = "Morisita \nOverlap") + theme(axis.text.x = element_text(angle = 45, hjust = 1),
+                                                                                                                 legend.text = element_text(size=9),
+                                                                                                                 legend.title = element_text(size = 10),
+                                                                                                                 legend.key.size = unit(0.35, 'cm'),
+                                                                                                                 text = element_text(size=10))
+
+finalcd4pbl_morisita <- clonalOverlap(finalcd4pbl_tcrbycluster, cloneCall = "aa", method = "morisita", exportTable = T)
+finalcd4pbl_morisita$names <- NULL
+finalcd4pbl_morisita <- as.matrix(finalcd4pbl_morisita)
+finalcd4pbl_morisita <- Matrix::forceSymmetric(finalcd4pbl_morisita,uplo="U")
+finalcd4pbl_morisita <- as.matrix(finalcd4pbl_morisita)
+cd4pblOverlapheatmap <- Heatmap(finalcd4pbl_morisita, cluster_columns = F, cluster_rows = F, 
+        col = colorRampPalette(c("white", "#88a0c4"))(1000),
+        heatmap_legend_param = list(title = "Blood \nMorisita \nOverlap"), column_order = levels(finalCD4$clusters_names), row_order = levels(finalCD4$clusters_names),
+        column_names_rot = 45, column_names_centered = F, column_names_gp = gpar(fontsize = 8), row_names_gp = gpar(fontsize = 8),
+        width = ncol(cd4signatures_cluster)*unit(10, "mm"), 
+        height = nrow(cd4signatures_cluster)*unit(3, "mm"), 
+        rect_gp = gpar(col = "white", lwd = 0.5))
+
+setEPS()
+postscript("cd4_PBL_heatmap_clonalOverlap_byCluster.eps", width = 7, height = 5)
+draw(cd4pblOverlapheatmap)
+dev.off()
+
+
+
+#clonal sharing all
+finalCD4$clusters_names_tissue <- paste0(finalCD4$tissue_source, "_", finalCD4$clusters_names)
+finalcd4_tcrbycluster <- expression2List(finalCD4, group = "clusters_names_tissue")
+clonalOverlap(finalcd4_tcrbycluster, cloneCall = "aa", method = "morisita") +
+  scale_fill_distiller(palette = "Reds", direction = 1, na.value = "white", name = "Morisita \nOverlap") + theme(axis.text.x = element_text(angle = 45, hjust = 1),
+                                                                                                                 legend.text = element_text(size=9),
+                                                                                                                 legend.title = element_text(size = 10),
+                                                                                                                 legend.key.size = unit(0.35, 'cm'),
+                                                                                                                 text = element_text(size=10))
+
+finalcd4_morisita <- clonalOverlap(finalcd4_tcrbycluster, cloneCall = "aa", method = "morisita", exportTable = T)
+finalcd4_morisita$names <- NULL
+finalcd4_morisita <- as.matrix(finalcd4_morisita)
+finalcd4_morisita <- Matrix::forceSymmetric(finalcd4_morisita,uplo="U")
+finalcd4_morisita <- as.matrix(finalcd4_morisita)
+finalcd4_morisita <- finalcd4_morisita[c(15:28),c(1:14)]
+finalcd4_morisita <- finalcd4_morisita[c(11,4,1,8,6,7,13,14,3,2,5,9,12,10),c(1:14)]
+finalcd4_morisita <- finalcd4_morisita[c(1:14), c(11,4,1,8,6,7,13,14,3,2,5,9,12,10)]
+cd4Overlapheatmap <- Heatmap(finalcd4_morisita, cluster_columns = F, cluster_rows = F, 
+                             col = colorRampPalette(c("white", "grey60", "grey30"))(1000),
+                             heatmap_legend_param = list(title = "Morisita \nOverlap"), row_labels = levels(finalCD4$clusters_names), column_labels = levels(finalCD4$clusters_names),
+                             column_names_rot = 45, column_names_centered = F, column_names_gp = gpar(fontsize = 8), row_names_gp = gpar(fontsize = 8),
+                             width = ncol(cd4signatures_cluster)*unit(10, "mm"), 
+                             height = nrow(cd4signatures_cluster)*unit(3, "mm"), 
+                             rect_gp = gpar(col = "grey90", lwd = 0.3))
+setEPS()
+postscript("cd4_all_heatmap_clonalOverlap_byCluster.eps", width = 7, height = 5)
+draw(cd4Overlapheatmap)
+dev.off()
+
+tfh_syn_clones <- finalCD4_SYN@meta.data %>% filter(clusters_names == "Tfh/Tph") %>% distinct(CTaa) %>% filter(!is.na(CTaa))
+tfh_syn_clones <- tfh_syn_clones$CTaa
+
+tph_syn_clones <- finalCD4_SYN@meta.data %>% filter(clusters_names == "Tph") %>% distinct(CTaa) %>% filter(!is.na(CTaa))
+tph_syn_clones <- tph_syn_clones$CTaa
+
+naive_pbl_clones <- finalCD4_PBL@meta.data %>% filter(clusters_names == "Naive") %>% distinct(CTaa) %>% filter(!is.na(CTaa))
+naive_pbl_clones <- naive_pbl_clones$CTaa
+tfh_naive <- intersect(tfh_syn_clones, naive_pbl_clones) #0
+tph_naive <- intersect(tph_syn_clones, naive_pbl_clones) #0
+  
+naivemem_pbl_clones <- finalCD4_PBL@meta.data %>% filter(clusters_names == "GIMAP+ naive/memory") %>% distinct(CTaa) %>% filter(!is.na(CTaa))
+naivemem_pbl_clones <- naivemem_pbl_clones$CTaa
+tfh_naivemem <- intersect(tfh_syn_clones, naivemem_pbl_clones) #0
+tph_naivemem <- intersect(tph_syn_clones, naivemem_pbl_clones) #0
+
+ccr7_pbl_clones <- finalCD4_PBL@meta.data %>% filter(clusters_names == "CCR7+ memory") %>% distinct(CTaa) %>% filter(!is.na(CTaa))
+ccr7_pbl_clones <- ccr7_pbl_clones$CTaa
+tfh_ccr7 <- intersect(tfh_syn_clones, ccr7_pbl_clones) #0
+tph_ccr7 <- intersect(tph_syn_clones, ccr7_pbl_clones) #0
+
+il7r_pbl_clones <- finalCD4_PBL@meta.data %>% filter(clusters_names == "IL7R+CCL5+ memory") %>% distinct(CTaa) %>% filter(!is.na(CTaa))
+il7r_pbl_clones <- il7r_pbl_clones$CTaa
+tfh_il7r <- intersect(tfh_syn_clones, il7r_pbl_clones) #1
+tph_il7r <- intersect(tph_syn_clones, il7r_pbl_clones) #0
+
+gzma_pbl_clones <- finalCD4_PBL@meta.data %>% filter(clusters_names == "GZMA+CCL5+ memory") %>% distinct(CTaa) %>% filter(!is.na(CTaa))
+gzma_pbl_clones <- gzma_pbl_clones$CTaa
+tfh_gzma <- intersect(tfh_syn_clones, gzma_pbl_clones) #0
+tph_gzma <- intersect(tph_syn_clones, gzma_pbl_clones) #0
+
+gzmk_pbl_clones <- finalCD4_PBL@meta.data %>% filter(clusters_names == "GZMK+ memory") %>% distinct(CTaa) %>% filter(!is.na(CTaa))
+gzmk_pbl_clones <- gzmk_pbl_clones$CTaa
+tfh_gzmk <- intersect(tfh_syn_clones, gzmk_pbl_clones) #0
+tph_gzmk <- intersect(tph_syn_clones, gzmk_pbl_clones) #1
+
+tfh_pbl_clones <- finalCD4_PBL@meta.data %>% filter(clusters_names == "Tfh/Tph") %>% distinct(CTaa) %>% filter(!is.na(CTaa))
+tfh_pbl_clones <- tfh_pbl_clones$CTaa
+tfh_tfh <- intersect(tfh_syn_clones, tfh_pbl_clones) #2
+tph_tfh <- intersect(tph_syn_clones, tfh_pbl_clones) #3
+
+tph_pbl_clones <- finalCD4_PBL@meta.data %>% filter(clusters_names == "Tph") %>% distinct(CTaa) %>% filter(!is.na(CTaa))
+tph_pbl_clones <- tph_pbl_clones$CTaa
+tfh_tph <- intersect(tfh_syn_clones, tph_pbl_clones) #3
+tph_tph <- intersect(tph_syn_clones, tph_pbl_clones) #5
+
+cd25lo_pbl_clones <- finalCD4_PBL@meta.data %>% filter(clusters_names == "CD25-low Treg") %>% distinct(CTaa) %>% filter(!is.na(CTaa))
+cd25lo_pbl_clones <- cd25lo_pbl_clones$CTaa
+tfh_cd25lo <- intersect(tfh_syn_clones, cd25lo_pbl_clones) #0
+tph_cd25lo <- intersect(tph_syn_clones, cd25lo_pbl_clones) #0
+
+cd25hi_pbl_clones <- finalCD4_PBL@meta.data %>% filter(clusters_names == "CD25-high Treg") %>% distinct(CTaa) %>% filter(!is.na(CTaa))
+cd25hi_pbl_clones <- cd25hi_pbl_clones$CTaa
+tfh_cd25hi <- intersect(tfh_syn_clones, cd25hi_pbl_clones) #0
+tph_cd25hi <- intersect(tph_syn_clones, cd25hi_pbl_clones) #1
+
+gnly_pbl_clones <- finalCD4_PBL@meta.data %>% filter(clusters_names == "GNLY+") %>% distinct(CTaa) %>% filter(!is.na(CTaa))
+gnly_pbl_clones <- gnly_pbl_clones$CTaa
+tfh_gnly <- intersect(tfh_syn_clones, gnly_pbl_clones) #0
+tph_gnly <- intersect(tph_syn_clones, gnly_pbl_clones) #0
+
+isg_pbl_clones <- finalCD4_PBL@meta.data %>% filter(clusters_names == "ISG-high") %>% distinct(CTaa) %>% filter(!is.na(CTaa))
+isg_pbl_clones <- isg_pbl_clones$CTaa
+tfh_isg <- intersect(tfh_syn_clones, isg_pbl_clones) #0
+tph_isg <- intersect(tph_syn_clones, isg_pbl_clones) #0
+
+prolif_pbl_clones <- finalCD4_PBL@meta.data %>% filter(clusters_names == "Proliferating") %>% distinct(CTaa) %>% filter(!is.na(CTaa))
+prolif_pbl_clones <- prolif_pbl_clones$CTaa
+tfh_prolif <- intersect(tfh_syn_clones, prolif_pbl_clones) #0
+tph_prolif <- intersect(tph_syn_clones, prolif_pbl_clones) #1
+
+mito_pbl_clones <- finalCD4_PBL@meta.data %>% filter(clusters_names == "MT-high") %>% distinct(CTaa) %>% filter(!is.na(CTaa))
+mito_pbl_clones <- mito_pbl_clones$CTaa
+tfh_mito <- intersect(tfh_syn_clones, mito_pbl_clones) #0
+tph_mito <- intersect(tph_syn_clones, mito_pbl_clones) #0
+
+tphsyn_blood_overlapclones <- matrix(c(0,0,0,1,0,0,2,3,0,0,0,0,0,0,0,0,0,0,0,1,3,5,0,1,0,0,1,0),ncol=14,byrow=TRUE)
+cd4Overlapheatmap <- Heatmap(tphsyn_blood_overlapclones, cluster_columns = F, cluster_rows = F, 
+                             col = colorRampPalette(c("white", "grey60", "grey30"))(1000),
+                             heatmap_legend_param = list(title = "# of \nOverlapping \nClones"), row_labels = levels(finalCD4$clusters_names)[7:8], column_labels = levels(finalCD4$clusters_names),
+                             column_names_rot = 45, column_names_centered = F, column_names_gp = gpar(fontsize = 8), row_names_gp = gpar(fontsize = 8),
+                             width = ncol(cd4signatures_cluster)*unit(10, "mm"), 
+                             height = nrow(cd4signatures_cluster)*unit(1, "mm"), 
+                             rect_gp = gpar(col = "grey90", lwd = 0.3))
+
+setEPS()
+postscript("cd4_all_heatmap_clonalOverlap_byCluster.eps", width = 7, height = 5)
+draw(cd4Overlapheatmap)
+dev.off()
+
+
+cd4prolif <- subset(finalCD4, subset = clusters_names == "Proliferating")
+cd4_exceptprolif <- subset(finalCD4, subset = clusters_names == "Proliferating", invert = T)
+
+symphT_reference <- symphony::buildReference(
+  cd4_exceptprolif@assays$RNA@data,
+  cd4_exceptprolif@meta.data,
+  vars = c("sampleTissue_Pub"),         # variables to integrate over
+  K = 100,                   # number of Harmony clusters
+  verbose = TRUE,            # verbose output
+  do_umap = FALSE,            # can set to FALSE if want to run umap separately later
+  do_normalize = FALSE,      # set to TRUE if input counts are not normalized yet
+  vargenes_method = 'vst',   # method for variable gene selection ('vst' or 'mvp')
+  #vargenes_groups = 'clusters_names', # metadata column specifying groups for variable gene selection 
+  topn = 2000,               # number of variable genes to choose per group
+  d = 20                     # number of PCs
+)
+
+queryT <- mapQuery(cd4prolif$RNA@data,             # query gene expression (genes x cells)
+                   cd4prolif@meta.data,        # query metadata (cells x attributes)
+                   symphT_reference,             # Symphony reference object
+                   vars = NULL,           # Query batch variables to harmonize over (NULL treats query as one batch)
+                   do_normalize = FALSE,  # perform log(CP10k) normalization on query (set to FALSE if already normalized)
+                   do_umap = FALSE)        # project query cells into reference UMAP
+
+queryT <- knnPredict(queryT, symphT_reference, train_labels = symphT_reference$meta_data$clusters_names,
+                     k = 10, save_as = 'cell_type_10_nn', confidence = TRUE)
+
+cd4_cluster_breakdown_exceptprolif <- as.data.frame(table(cd4_exceptprolif$clusters_names))
+ggplot(cd4_cluster_breakdown_exceptprolif, aes(x = 2, y = Freq, fill = Var1)) +
+  geom_bar(stat = "identity", color = "white") +
+  coord_polar(theta = "y", start = 0) +
+  guides(fill = guide_legend(reverse = TRUE)) +
+  guides(fill=guide_legend(title=NULL)) +
+  scale_fill_manual(values = cd4cols) +
+  theme_void() +
+  xlim(0.5, 2.5) +
+  theme(legend.key.size = unit(0.35, 'cm'),
+        legend.text = element_text(size = 9))
+
+cd4_reClusterProlif_cluster_breakdown <- as.data.frame(table(queryT$meta_data$cell_type_10_nn))
+ggplot(cd4_reClusterProlif_cluster_breakdown, aes(x = 2, y = Freq, fill = Var1)) +
+  geom_bar(stat = "identity", color = "white") +
+  coord_polar(theta = "y", start = 0) +
+  guides(fill = guide_legend(reverse = TRUE)) +
+  guides(fill=guide_legend(title=NULL)) +
+  scale_fill_manual(values = cd4cols) +
+  theme_void() +
+  xlim(0.5, 2.5) +
+  theme(legend.key.size = unit(0.35, 'cm'),
+        legend.text = element_text(size = 9))  
+
+cd4_cluster_breakdown_exceptprolif <- as.data.frame(table(cd4_exceptprolif$clusters_names, cd4_exceptprolif$tissue_source))
+cd4_cluster_breakdown_exceptprolif %>% 
+  group_by(Var1, Var2) %>%
+  dplyr::count(Freq) %>%
+  group_by(Var2) %>%
+  mutate(Percent=100*Freq/sum(Freq)) %>% ungroup() %>%
+  ggplot(aes(x = 2, y = Percent, fill = Var1)) +
+  geom_bar(stat = "identity", color = "white") + facet_wrap(~Var2) +
+  coord_polar(theta = "y", start = 0) +
+  guides(fill = guide_legend(reverse = TRUE)) +
+  guides(fill=guide_legend(title=NULL)) +
+  scale_fill_manual(values = cd4cols) +
+  theme_void() +
+  xlim(0.5, 2.5) +
+  theme(legend.position = "none")  
+ggsave("CD4_clusterBreakdown_exceptProlif_tissueSplit.eps", width = 6, height = 2)
+
+cd4_reClusterProlif_cluster_breakdown <- as.data.frame(table(queryT$meta_data$cell_type_10_nn, queryT$meta_data$tissue_source))
+cd4_reClusterProlif_cluster_breakdown %>% 
+  group_by(Var1, Var2) %>%
+  dplyr::count(Freq) %>%
+  group_by(Var2) %>%
+  mutate(Percent=100*Freq/sum(Freq)) %>% ungroup() %>%
+  ggplot(aes(x = 2, y = Percent, fill = Var1)) +
+  geom_bar(stat = "identity", color = "white") + facet_wrap(~Var2) +
+  coord_polar(theta = "y", start = 0) +
+  guides(fill = guide_legend(reverse = TRUE)) +
+  guides(fill=guide_legend(title=NULL)) +
+  scale_fill_manual(values = cd4cols) +
+  theme_void() +
+  xlim(0.5, 2.5) +
+  theme(legend.position = "none")  
+ggsave("CD4_clusterBreakdown_prolifReMapped_tissueSplit.eps", width = 6, height = 2)
+
+
+
+#tph synovial cells
+finalCD4_SYN_tph <- subset(finalCD4_SYN, subset = clusters_names == "Tph")
+Idents(finalCD4_SYN_tph) <- finalCD4_SYN_tph$clonal
+tph_clonal_DEG <- FindMarkers(finalCD4_SYN_tph, ident.1 = "Yes", ident.2 = "No")
+tph_clonal_DEGpos <- FindMarkers(finalCD4_SYN_tph, ident.1 = "Yes", ident.2 = "No", only.pos = T)
+VlnPlot(subset(finalCD4_SYN_tph, ident = "No TCR", invert = T), features = c("Naive_sig1", "TCR_sig1", "Effector_sig1", 
+                                                                             "Cytotoxicity_sig1", "Tfh_sig1", "Th17_sig1", 
+                                                                             "ISG_sig1", "Proliferation_sig1", "Mitochondrial_sig1"), ncol = 3, group.by = "clonal") & 
+  xlab(NULL) & ylab(NULL) & scale_x_discrete(labels = c("Not Clonal", "Clonal"))
+
+tphexpandedpercents <- finalCD4_SYN_tph@meta.data %>% filter(clonal != "No TCR") %>% 
+  group_by(sample_ID_Pub, CTaa) %>%
+  add_tally() %>% mutate(clonal = ifelse(n == 1, "= 1", "> 1")) %>% 
+  ungroup()  %>% group_by(sample_ID_Pub, clonal) %>% tally() %>% 
+  ungroup() %>% group_by(sample_ID_Pub) %>% mutate(Percent=100*n/sum(n)) %>%
+  filter(clonal == "> 1") %>% mutate(Cluster = "Tph")
+
+tphexpandedpercents  %>%
+  ggplot(aes(x= sample_ID_Pub, y = Percent)) + geom_col(fill = "#88a0c4") + 
+  xlab(NULL) + ylab("Cells in expanded clones") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+        axis.title.y = element_text(size = 10)) 
+ggsave("CD4_barplot_percent_Tphexpandedcells.eps", width = 3, height = 2)
+
+tpheffectorstat <- finalCD4_SYN_tph@meta.data %>% filter(clonal != "No TCR") %>% 
+  group_by(sample_ID_Pub, CTaa) %>%
+  add_tally() %>% mutate(clonal = ifelse(n == 1, "No", "Yes")) %>% 
+  ungroup() %>% group_by(sample_ID_Pub, clonal) %>%
+  mutate(mean = mean(Effector_sig1)) %>% distinct(sample_ID_Pub, clonal, .keep_all=T) %>% select(mean) %>% ungroup(sample_ID_Pub, clonal) %>% pairwise_t_test(mean ~ clonal) %>% add_significance() %>% add_y_position() %>% mutate(y.position = 1.05*y.position)
+
+tphclusteffector <- finalCD4_SYN_tph@meta.data %>% filter(clonal != "No TCR") %>% 
+  group_by(sample_ID_Pub, CTaa) %>%
+  add_tally() %>% mutate(clonal = ifelse(n == 1, "No", "Yes")) %>% 
+  ungroup() %>% group_by(sample_ID_Pub, clonal) %>%
+  mutate(mean = mean(Effector_sig1)) %>% distinct(sample_ID_Pub, clonal, .keep_all=T) %>% select(mean) %>%
+  ggplot(aes(x= clonal, y = mean)) + 
+  geom_boxplot(fill = cd4cols[8]) + geom_point() + 
+  stat_pvalue_manual(tpheffectorstat) +
+  scale_x_discrete(labels = c("= 1", " > 1")) + ggtitle("Tph Cluster") + xlab(NULL) + ylab("Effectorn Signature") +
+  theme_classic() + 
+  theme(axis.title.y = element_text(size = 10)) 
+#ggsave("CD4_boxplot_effectorness_Tphexpandedcells.eps", width = 1.5, height = 2.5)
+
+tphcytotoxstat <- finalCD4_SYN_tph@meta.data %>% filter(clonal != "No TCR") %>% 
+  group_by(sample_ID_Pub, CTaa) %>%
+  add_tally() %>% mutate(clonal = ifelse(n == 1, "No", "Yes")) %>% 
+  ungroup() %>% group_by(sample_ID_Pub, clonal) %>%
+  mutate(mean = mean(Cytotoxicity_sig1)) %>% distinct(sample_ID_Pub, clonal, .keep_all=T) %>% select(mean) %>% ungroup(sample_ID_Pub, clonal) %>% pairwise_t_test(mean ~ clonal) %>% add_significance() %>% add_y_position() %>% mutate(y.position = 1.05*y.position)
+
+tphclustcytotox <- finalCD4_SYN_tph@meta.data %>% filter(clonal != "No TCR") %>% 
+  group_by(sample_ID_Pub, CTaa) %>%
+  add_tally() %>% mutate(clonal = ifelse(n == 1, "No", "Yes")) %>% 
+  ungroup() %>% group_by(sample_ID_Pub, clonal) %>%
+  mutate(mean = mean(Cytotoxicity_sig1)) %>% distinct(sample_ID_Pub, clonal, .keep_all=T) %>% select(mean) %>%
+  ggplot(aes(x= clonal, y = mean)) + 
+  geom_boxplot(fill = cd4cols[8]) + geom_point() + 
+  stat_pvalue_manual(tphcytotoxstat) +
+  scale_x_discrete(labels = c("= 1", " > 1")) + xlab(NULL) + ylab("Cytotoxicity Signature") +
+  theme_classic() + 
+  theme(axis.title.y = element_text(size = 10)) 
+#ggsave("CD4_boxplot_cytotox_Tphexpandedcells.eps", width = 1.5, height = 2.5)
+
+tphtfhstat <- finalCD4_SYN_tph@meta.data %>% filter(clonal != "No TCR") %>% 
+  group_by(sample_ID_Pub, CTaa) %>%
+  add_tally() %>% mutate(clonal = ifelse(n == 1, "No", "Yes")) %>% 
+  ungroup() %>% group_by(sample_ID_Pub, clonal) %>%
+  mutate(mean = mean(Tfh_sig1)) %>% distinct(sample_ID_Pub, clonal, .keep_all=T) %>% select(mean) %>% ungroup(sample_ID_Pub, clonal) %>% pairwise_t_test(mean ~ clonal) %>% add_significance() %>% add_y_position() %>% mutate(y.position = 1.05*y.position)
+
+tphclusttfh <- finalCD4_SYN_tph@meta.data %>% filter(clonal != "No TCR") %>% 
+  group_by(sample_ID_Pub, CTaa) %>%
+  add_tally() %>% mutate(clonal = ifelse(n == 1, "No", "Yes")) %>% 
+  ungroup() %>% group_by(sample_ID_Pub, clonal) %>%
+  mutate(mean = mean(Tfh_sig1)) %>% distinct(sample_ID_Pub, clonal, .keep_all=T) %>% select(mean) %>%
+  ggplot(aes(x= clonal, y = mean)) + 
+  geom_boxplot(fill = cd4cols[8]) + geom_point() + 
+  stat_pvalue_manual(tphtfhstat) +
+  scale_x_discrete(labels = c("= 1", " > 1")) + xlab(NULL) + ylab("Tfh Signature") +
+  theme_classic() + ylim(0.05,0.30) +
+  theme(axis.title.y = element_text(size = 10)) 
+#ggsave("CD4_boxplot_tfhscore_Tphexpandedcells.eps", width = 1.5, height = 2.5)
+
+#tfh synovial cells
+finalCD4_SYN_tfh <- subset(finalCD4_SYN, subset = clusters_names == "Tfh/Tph")
+Idents(finalCD4_SYN_tfh) <- finalCD4_SYN_tfh$clonal
+tfh_syn_clonal_DEG <- FindMarkers(finalCD4_SYN_tfh, ident.1 = "Yes", ident.2 = "No")
+tfh_syn_clonal_DEGpos <- FindMarkers(finalCD4_SYN_tfh, ident.1 = "Yes", ident.2 = "No", only.pos = T)
+
+tfhexpandedpercents <- finalCD4_SYN_tfh@meta.data %>% filter(clonal != "No TCR") %>% 
+  group_by(sample_ID_Pub, CTaa) %>%
+  add_tally() %>% mutate(clonal = ifelse(n == 1, "= 1", "> 1")) %>% 
+  ungroup()  %>% group_by(sample_ID_Pub, clonal) %>% tally() %>% 
+  ungroup() %>% group_by(sample_ID_Pub) %>% mutate(Percent=100*n/sum(n)) %>%
+  filter(clonal == "> 1") %>% mutate(Cluster = "Tfh/Tph")
+
+tfhexpandedpercents %>%
+  ggplot(aes(x= sample_ID_Pub, y = Percent)) + geom_col(fill = "#88a0c4") + 
+  xlab(NULL) + ylab("Cells in expanded clones") + 
+  scale_y_continuous(labels = function(x) paste0(x, "%")) + 
+  theme_classic() +
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1),
+        axis.title.y = element_text(size = 10)) 
+ggsave("CD4_barplot_percent_Tfhexpandedcells.eps", width = 3, height = 2)
+
+tfheffectorstat <- finalCD4_SYN_tfh@meta.data %>% filter(clonal != "No TCR") %>% 
+  group_by(sample_ID_Pub, CTaa) %>%
+  add_tally() %>% mutate(clonal = ifelse(n == 1, "No", "Yes")) %>% 
+  ungroup() %>% group_by(sample_ID_Pub, clonal) %>%
+  mutate(mean = mean(Effector_sig1)) %>% distinct(sample_ID_Pub, clonal, .keep_all=T) %>% select(mean) %>% ungroup(sample_ID_Pub, clonal) %>% pairwise_t_test(mean ~ clonal) %>% add_significance() %>% add_y_position() %>% mutate(y.position = 1.05*y.position)
+
+tfhclusteffector <- finalCD4_SYN_tfh@meta.data %>% filter(clonal != "No TCR") %>% 
+  group_by(sample_ID_Pub, CTaa) %>%
+  add_tally() %>% mutate(clonal = ifelse(n == 1, "No", "Yes")) %>% 
+  ungroup() %>% group_by(sample_ID_Pub, clonal) %>%
+  mutate(mean = mean(Effector_sig1)) %>% distinct(sample_ID_Pub, clonal, .keep_all=T) %>% select(mean) %>%
+  ggplot(aes(x= clonal, y = mean)) + 
+  geom_boxplot(fill = cd4cols[7]) + geom_point() + 
+  stat_pvalue_manual(tfheffectorstat, size = 3) +
+  scale_x_discrete(labels = c("= 1", " > 1")) + ggtitle("Tfh/Tph Cluster") + xlab(NULL) + ylab("Effector Signature") +
+  theme_classic() +
+  theme(axis.title.y = element_text(size = 10)) 
+#ggsave("CD4_boxplot_effectorness_Tfhexpandedcells.eps", width = 1.5, height = 2.5)
+
+tfhcytotoxstat <- finalCD4_SYN_tfh@meta.data %>% filter(clonal != "No TCR") %>% 
+  group_by(sample_ID_Pub, CTaa) %>%
+  add_tally() %>% mutate(clonal = ifelse(n == 1, "No", "Yes")) %>% 
+  ungroup() %>% group_by(sample_ID_Pub, clonal) %>%
+  mutate(mean = mean(Cytotoxicity_sig1)) %>% distinct(sample_ID_Pub, clonal, .keep_all=T) %>% select(mean) %>% ungroup(sample_ID_Pub, clonal) %>% pairwise_t_test(mean ~ clonal) %>% add_significance() %>% add_y_position() %>% mutate(y.position = 2*y.position)
+
+tfhclustcytotox <- finalCD4_SYN_tfh@meta.data %>% filter(clonal != "No TCR") %>% 
+  group_by(sample_ID_Pub, CTaa) %>%
+  add_tally() %>% mutate(clonal = ifelse(n == 1, "No", "Yes")) %>% 
+  ungroup() %>% group_by(sample_ID_Pub, clonal) %>%
+  mutate(mean = mean(Cytotoxicity_sig1)) %>% distinct(sample_ID_Pub, clonal, .keep_all=T) %>% select(mean) %>%
+  ggplot(aes(x= clonal, y = mean)) + 
+  geom_boxplot(fill = cd4cols[7]) + geom_point() + 
+  stat_pvalue_manual(tfhcytotoxstat, size = 3) +
+  scale_x_discrete(labels = c("= 1", " > 1")) + xlab(NULL) + ylab("Cytotoxicity Signature") +
+  theme_classic() +
+  theme(axis.title.y = element_text(size = 10)) 
+#ggsave("CD4_boxplot_cytotox_Tfhexpandedcells.eps", width = 1.5, height = 2.5)
+
+tfhtfhstat <- finalCD4_SYN_tfh@meta.data %>% filter(clonal != "No TCR") %>% 
+  group_by(sample_ID_Pub, CTaa) %>%
+  add_tally() %>% mutate(clonal = ifelse(n == 1, "No", "Yes")) %>% 
+  ungroup() %>% group_by(sample_ID_Pub, clonal) %>%
+  mutate(mean = mean(Tfh_sig1)) %>% distinct(sample_ID_Pub, clonal, .keep_all=T) %>% select(mean) %>% ungroup(sample_ID_Pub, clonal) %>% pairwise_t_test(mean ~ clonal) %>% add_significance() %>% add_y_position() %>% mutate(y.position = 1.05*y.position)
+
+tfhclusttfh <- finalCD4_SYN_tfh@meta.data %>% filter(clonal != "No TCR") %>% 
+  group_by(sample_ID_Pub, CTaa) %>%
+  add_tally() %>% mutate(clonal = ifelse(n == 1, "No", "Yes")) %>% 
+  ungroup() %>% group_by(sample_ID_Pub, clonal) %>%
+  mutate(mean = mean(Tfh_sig1)) %>% distinct(sample_ID_Pub, clonal, .keep_all=T) %>% select(mean) %>%
+  ggplot(aes(x= clonal, y = mean)) + 
+  geom_boxplot(fill = cd4cols[7]) + geom_point() + 
+  stat_pvalue_manual(tfhtfhstat, size = 3) +
+  scale_x_discrete(labels = c("= 1", " > 1")) + xlab(NULL) + ylab("Tfh Signature") +
+  theme_classic() + 
+  theme(axis.title.y = element_text(size = 10)) 
+#ggsave("CD4_boxplot_tfhscore_Tfhexpandedcells.eps", width = 1.5, height = 2.5)
+
+tphtfhsigplotalign <- align_plots(tphclusteffector, tphclustcytotox, tphclusttfh, tfhclusteffector, tfhclustcytotox, tfhclusttfh,  align="hv", axis="tblr")
+tph_sig_p1x <- ggdraw(tphtfhsigplotalign[[1]])
+tph_sig_p2x <- ggdraw(tphtfhsigplotalign[[2]])
+tph_sig_p3x <- ggdraw(tphtfhsigplotalign[[3]])
+tfh_sig_p1x <- ggdraw(tphtfhsigplotalign[[4]])
+tfh_sig_p2x <- ggdraw(tphtfhsigplotalign[[5]])
+tfh_sig_p3x <- ggdraw(tphtfhsigplotalign[[6]])
+
+save_plot("CD4_boxplot_effectorness_Tphexpandedcells.eps", tph_sig_p1x, base_width = 1.5, base_height = 2.6)
+save_plot("CD4_boxplot_effectorness_Tphexpandedcells_forLabel.eps", tph_sig_p1x, base_width = 2.5, base_height = 2.6)
+save_plot("CD4_boxplot_cytotox_Tphexpandedcells.eps", tph_sig_p2x, base_width = 1.5, base_height = 2.6)
+save_plot("CD4_boxplot_tfhscore_Tphexpandedcells.eps", tph_sig_p3x, base_width = 1.5, base_height = 2.6)
+
+save_plot("CD4_boxplot_effectorness_Tfhexpandedcells.eps", tfh_sig_p1x, base_width = 1.5, base_height = 2.6)
+save_plot("CD4_boxplot_effectorness_Tfhexpandedcells_forLabel.eps", tfh_sig_p1x, base_width = 2.5, base_height = 2.6)
+save_plot("CD4_boxplot_cytotox_Tfhexpandedcells.eps", tfh_sig_p2x, base_width = 1.5, base_height = 2.6)
+save_plot("CD4_boxplot_tfhscore_Tfhexpandedcells.eps", tfh_sig_p3x, base_width = 1.5, base_height = 2.6)
+
+#tph and tfh synovial cells expansion
+tphtfhexpandedcombined <- rbind(tphexpandedpercents, tfhexpandedpercents)
+tphtfhexpandedcombined %>% 
+  ggplot(aes(x = sample_ID_Pub, y = Percent, fill = Cluster)) +
+  geom_bar(position="dodge", stat="identity") +
+  scale_fill_manual(values = cd4cols[7:8]) +
+  xlab(NULL) + ylab("Cells in expanded clones") + 
+  scale_y_continuous(labels = function(x) paste0(x, "%")) + 
+  theme_classic() +
+  theme(axis.text.x = element_text(size = 9, angle = 45, hjust = 1),
+        axis.title.y = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm'),
+        legend.title = element_text(size = 10)) 
+ggsave("CD4_barplot_percent_Tph_Tfh_expandedcells.eps", width = 4, height = 2)
+
+#heatmap of select markers
+finalCD4_SYN_tfh_and_tph <- subset(finalCD4_SYN, subset = clusters_names == c("Tfh/Tph", "Tph"))
+finalCD4_SYN_tfh_and_tph$cluster_clonal <- paste0(finalCD4_SYN_tfh_and_tph$clusters_names, "_", finalCD4_SYN_tfh_and_tph$clonal)
+
+finalCD4_SYN_tfh_and_tph_removeNoTCR <- subset(finalCD4_SYN_tfh_and_tph, subset = clonal == c("No TCR"), invert = T)
+tphtfh_syn_pseudobulk <- AverageExpression(finalCD4_SYN_tfh_and_tph_removeNoTCR, group.by = "cluster_clonal", 
+                       features = unique(c(cd4signatures$Cytotoxicity, cd4signatures$Effectorness)), assays = "RNA")
+tphtfh_syn_pseudobulk <- as.data.frame(tphtfh_syn_pseudobulk)
+tphtfh_syn_pseudobulk <- tphtfh_syn_pseudobulk[,c(4,3,2,1)]
+
+tphtfh_syn_pseudobulk_genes <- rownames(tphtfh_syn_pseudobulk)
+tphtfh_syn_pseudobulk_genes$gene <- rownames(tphtfh_syn_pseudobulk)
+tphtfh_syn_pseudobulk_genes$sig <- ifelse(tphtfh_syn_pseudobulk_genes$gene %in% cd4signatures$Cytotoxicity, 
+                                          ifelse(tphtfh_syn_pseudobulk_genes$gene %in% cd4signatures$Effectorness, "Both", "Cytotox"),
+                                          ifelse(tphtfh_syn_pseudobulk_genes$gene %in% cd4signatures$Effectorness, "Effector", "None"))
+
+ha <- HeatmapAnnotation(
+  Cluster = c("Tph", "Tph", "Tfh/Tph", "Tfh/Tph"),
+  col = list(Cluster = c("Tph" = cd4cols[8], "Tfh/Tph" = cd4cols[7])),
+  annotation_name_gp = gpar(fontsize = 10))
+
+hb <- rowAnnotation(
+  Signature= tphtfh_syn_pseudobulk_genes$sig,
+  annotation_name_gp = gpar(fontsize = 10),
+  annotation_name_rot = 45)
+
+col_fun = colorRamp2(c(2, 0, -2), c("#5e0e04", "white", "lightgrey"))
+
+tphtfh_syn_heatmap_cytotox_effector <- Heatmap(t(scale(t(tphtfh_syn_pseudobulk[rowSums(tphtfh_syn_pseudobulk[])>0,]))), cluster_columns = F, 
+        column_labels = c("> 1", "= 1", "> 1", "= 1"), column_names_rot = 45, column_names_centered = F,
+        heatmap_legend_param = list(title = "Scaled \nExpression"),
+        row_names_gp = gpar(fontsize = 9), column_names_gp = gpar(fontsize = 10),
+        rect_gp = gpar(col = "white", lwd = 0.5), col = col_fun, left_annotation = hb, 
+        top_annotation = ha)
+
+setEPS()
+postscript("cd4_syn_tphtfh_clonal_cytotox_effector_heatmap.eps", width = 4.5, height = 6)
+draw(tphtfh_syn_heatmap_cytotox_effector)
+dev.off()
+
+
+
+StackedVlnPlot(finalCD4, features = c("IFNG", "CXCL13"), cols = cd4cols)
+ggsave("CD4_stackerVln_IFNG_CXCL13.eps", width = 6, height = 2)
+
+cellchat_bcellIntExClusters <- subset(finalCD4, idents = c("GZMA+CCL5+ memory", "Tfh/Tph", "Tph", "GNLY+", "Proliferating"))
+cellchat_bcellIntExClusters$clusters_names <- factor(cellchat_bcellIntExClusters$clusters_names, levels = rev(c("Tph", "Tfh/Tph", "GZMA+CCL5+ memory", "GNLY+", "Proliferating")))
+Idents(cellchat_bcellIntExClusters) <- cellchat_bcellIntExClusters$clusters_names
+
+StackedVlnPlot(cellchat_bcellIntExClusters, features = c("IFNG", "CXCL13"), cols = cd4cols[c(13,11,5,7,8)])
+ggsave("CD4_stackedVln_IFNG_CXCL13_selectClustersForCellChat.eps", width = 3.5, height = 2.5)
+
+DimPlot(finalCD4) + 
+  scale_color_manual(values = c("grey", "grey", "grey", "grey", "grey", "grey", cd4cols[c(7,8)], "grey", "grey", "grey", "grey", "grey", "grey")) +
+  ggtitle(NULL) + xlab("UMAP 1") + ylab("UMAP 2") +
+  theme(legend.text = element_text(size=10),
+        legend.key.size = unit(0.35, 'cm'),
+        legend.title = element_text(size=10, face="bold"))
+ggsave("CD4_UMAP_namedclusters_tfhtphHighlight.eps", width = 5.5, height = 3.5)
+
+DimPlot(finalCD4_tph_tfh, cols = cd4cols[c(7,8)])
+ggsave("CD4_tfhtph_UMAP_namedclusters.eps", width = 4, height = 2.5)
+
+FeaturePlot(finalCD4_tph_tfh, features = c("CXCL13", "CXCR5"), order = T, cols = rev(c("black", "gray90"))) &
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+finalCD4_tph_tfh$cellnum <- rownames(finalCD4_tph_tfh@meta.data)
+finalCD4_tph_tfh$cxcr5 <- ifelse(finalCD4_tph_tfh$cellnum %in% WhichCells(finalCD4_tph_tfh, expression = CXCR5 > 0), "CXCR5+", "CXCR5-")
+finalCD4_tph_tfh$cxcl13 <- ifelse(finalCD4_tph_tfh$cellnum %in% WhichCells(finalCD4_tph_tfh, expression = CXCL13 > 0), "CXCL13+", "CXCL13-")
+
+finalCD4_tph_tfh$cxcr5 <- factor(finalCD4_tph_tfh$cxcr5, levels = c("CXCR5+", "CXCR5-"))
+finalCD4_tph_tfh$cxcl13 <- factor(finalCD4_tph_tfh$cxcl13, levels = c("CXCL13+", "CXCL13-"))
+
+#percent CXCL13+
+a <- finalCD4_tph_tfh@meta.data %>% 
+  group_by(clusters_names, cxcl13, sample_ID_Pub) %>%
+  dplyr::count() %>%
+  group_by(clusters_names, sample_ID_Pub) %>%
+  mutate(Percent=100*n/sum(n)) %>% filter(cxcl13 == "CXCL13+") %>% 
+  ungroup() %>% pairwise_t_test(Percent ~ clusters_names) %>% 
+  add_significance() %>% add_y_position()
+
+a$y.position <- 85
+finalCD4_tph_tfh@meta.data %>%
+  group_by(clusters_names, cxcl13, sample_ID_Pub) %>%
+  dplyr::count() %>%
+  group_by(clusters_names, sample_ID_Pub) %>%
+  mutate(Percent=100*n/sum(n)) %>% filter(cxcl13 == "CXCL13+") %>%
+  ungroup() %>%
+  ggplot(aes(x=clusters_names,y=Percent)) + geom_boxplot(aes(fill = clusters_names)) + stat_pvalue_manual(a, label = "p.adj") +
+  scale_fill_manual(values = cd4cols[c(7,8)], name = NULL) + xlab(NULL) + ylab("% CXCL13+ Cells") + ylim(0,100) +
+  theme_classic() + theme(legend.position = "none")
+ggsave("CD4_tfhtph_percentCXCL13.eps", width = 2, height = 2)
+
+#percent CXCR5+
+a <- finalCD4_tph_tfh@meta.data %>% 
+  group_by(clusters_names, cxcr5, sample_ID_Pub) %>%
+  dplyr::count() %>%
+  group_by(clusters_names, sample_ID_Pub) %>%
+  mutate(Percent=100*n/sum(n)) %>% filter(cxcr5 == "CXCR5+") %>% 
+  ungroup() %>% pairwise_t_test(Percent ~ clusters_names) %>% 
+  add_significance() %>% add_y_position()
+
+a$y.position <- 25
+finalCD4_tph_tfh@meta.data %>% 
+  group_by(clusters_names, cxcr5, sample_ID_Pub) %>%
+  dplyr::count() %>%
+  group_by(clusters_names, sample_ID_Pub) %>%
+  mutate(Percent=100*n/sum(n)) %>% filter(cxcr5 == "CXCR5+") %>% 
+  ungroup() %>%
+  ggplot(aes(x=clusters_names,y=Percent)) + geom_boxplot(aes(fill = clusters_names)) + stat_pvalue_manual(a, label = "p.adj") +
+  scale_fill_manual(values = cd4cols[c(7,8)], name = NULL) + xlab(NULL) + ylab("% CXCR5+ Cells") + ylim(0,30) +
+  theme_classic() + theme(legend.position = "none")
+ggsave("CD4_tfhtph_percentCXCR5.eps", width = 2, height = 2)
+
+
+finalCD4_tph_tfh_clonal <- subset(finalCD4_tph_tfh, subset = clonal == "Yes")
+
+tph_all <- finalCD4_tph_tfh_clonal@meta.data %>% filter(clusters_names == "Tph") %>% select(CTaa) %>% na.omit() %>% distinct(CTaa)
+tph_all <- tph_all$CTaa
+
+tph_5pos <- finalCD4_tph_tfh_clonal@meta.data %>% filter(clusters_names == "Tph") %>% filter(cxcr5 == "CXCR5+") %>% select(CTaa) %>% na.omit() %>% distinct(CTaa)
+tph_5pos <- tph_5pos$CTaa
+
+tph_5neg <- finalCD4_tph_tfh_clonal@meta.data %>% filter(clusters_names == "Tph") %>% filter(cxcr5 == "CXCR5-") %>% select(CTaa) %>% na.omit() %>% distinct(CTaa)
+tph_5neg <- tph_5neg$CTaa
+
+tfh_5pos <- finalCD4_tph_tfh_clonal@meta.data %>% filter(clusters_names == "Tfh/Tph") %>% filter(cxcr5 == "CXCR5+") %>% select(CTaa) %>% na.omit() %>% distinct(CTaa)
+tfh_5pos <- tfh_5pos$CTaa
+
+tfh_5neg <- finalCD4_tph_tfh_clonal@meta.data %>% filter(clusters_names == "Tfh/Tph") %>% filter(cxcr5 == "CXCR5-") %>% select(CTaa) %>% na.omit() %>% distinct(CTaa)
+tfh_5neg <- tfh_5neg$CTaa
+
+tph_syn <- finalCD4_tph_tfh_clonal@meta.data %>% filter(clusters_names == "Tph") %>% filter(tissue_source == "SYN") %>% select(CTaa) %>% na.omit() %>% distinct(CTaa)
+tph_syn <- tph_syn$CTaa
+
+tph_pbl <- finalCD4_tph_tfh_clonal@meta.data %>% filter(clusters_names == "Tph") %>% filter(tissue_source == "PBL") %>% select(CTaa) %>% na.omit() %>% distinct(CTaa)
+tph_pbl <- tph_pbl$CTaa
+
+tfh_syn <- finalCD4_tph_tfh_clonal@meta.data %>% filter(clusters_names == "Tfh/Tph") %>% filter(tissue_source == "SYN") %>% select(CTaa) %>% na.omit() %>% distinct(CTaa)
+tfh_syn <- tfh_syn$CTaa
+
+tfh_pbl <- finalCD4_tph_tfh_clonal@meta.data %>% filter(clusters_names == "Tfh/Tph") %>% filter(tissue_source == "PBL") %>% select(CTaa) %>% na.omit() %>% distinct(CTaa)
+tfh_pbl <- tfh_pbl$CTaa
+
+#Tph and Tfh/Tph, by tissue
+list_clones_allclust <- list("Tph SYN" = tph_syn, "Tph PBL" = tph_pbl, "Tfh/Tph SYN" = tfh_syn, "Tfh/Tph PBL" = tfh_pbl)
+
+upset(fromList(list_clones_allclust), sets = c("Tfh/Tph PBL", "Tfh/Tph SYN", "Tph PBL", "Tph SYN"), 
+      keep.order = T, mainbar.y.label = "Number of \nOverlapping Clones", sets.x.label = "Clones >1 cell", order.by = "freq")
+
+#Tph, and CXCR5+/- Tfh/Tph
+list_clones_allclust <- list("Tph" = tph_all, "Tfh/Tph (CXCR5+)" = tfh_5pos, "Tfh/Tph (CXCR5-)" = tfh_5neg)
+
+upset(fromList(list_clones_allclust), sets = c("Tfh/Tph (CXCR5+)", "Tfh/Tph (CXCR5-)", "Tph"), 
+      keep.order = T, mainbar.y.label = "Number of \nOverlapping Clones", sets.x.label = "Clones >1 cell", order.by = "freq")
+
+#CXCR5+/- Tph and CXCR5+/- Tfh/Tph
+list_clones_allclust <- list("Tph (CXCR5+)" = tph_5pos, "Tph (CXCR5-)" = tph_5neg, "Tfh/Tph (CXCR5+)" = tfh_5pos, "Tfh/Tph (CXCR5-)" = tfh_5neg)
+
+upset(fromList(list_clones_allclust), sets = c("Tfh/Tph (CXCR5+)", "Tfh/Tph (CXCR5-)", "Tph (CXCR5+)", "Tph (CXCR5-)"), 
+      keep.order = T, mainbar.y.label = "Number of \nOverlapping Clones", sets.x.label = "Clones >1 cell", order.by = "freq")
+
+#CXCR5- Tph and CXCR5+/- Tfh/Tph
+list_clones_allclust <- list("Tph (CXCR5-)" = tph_5neg, "Tfh/Tph (CXCR5+)" = tfh_5pos, "Tfh/Tph (CXCR5-)" = tfh_5neg)
+
+upset(fromList(list_clones_allclust), sets = c("Tfh/Tph (CXCR5+)", "Tfh/Tph (CXCR5-)", "Tph (CXCR5-)"), 
+      keep.order = T, mainbar.y.label = "Number of \nOverlapping Clones", sets.x.label = "Clones >1 cell", order.by = "freq")
+
+finalCD4_tph_tfh@meta.data %>%
+  group_by(clusters_names, cxcr5) %>%
+  dplyr::count() %>%
+  group_by(clusters_names) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=clusters_names,y=Percent, fill = cxcr5)) +
+  geom_col() +
+  scale_fill_manual(name = NULL, values = cd4cols[c(3,4)]) +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  labs(fill = "Sample") +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10)) 
+
+#considering both CXCL13 and CXCR5 positivity
+finalCD4_tph_tfh$cxcl13_cxcr5 <- ifelse(((finalCD4_tph_tfh$cxcl13 == "CXCL13+") & (finalCD4_tph_tfh$cxcr5 == "CXCR5+")), "CXCL13+CXCR5+", 
+                                        ifelse(((finalCD4_tph_tfh$cxcl13 == "CXCL13+") & (finalCD4_tph_tfh$cxcr5 == "CXCR5-")), "CXCL13+CXCR5-",
+                                        ifelse(((finalCD4_tph_tfh$cxcl13 == "CXCL13-") & (finalCD4_tph_tfh$cxcr5 == "CXCR5+")), "CXCL13-CXCR5+", "CXCL13-CXCR5-")))
+
+finalCD4_tph_tfh$cxcl13_cxcr5 <- factor(finalCD4_tph_tfh$cxcl13_cxcr5, levels = c("CXCL13+CXCR5+", "CXCL13-CXCR5+", "CXCL13+CXCR5-", "CXCL13-CXCR5-"))
+
+finalCD4_tph_tfh@meta.data %>%
+  group_by(clusters_names, cxcl13_cxcr5) %>%
+  dplyr::count() %>%
+  group_by(clusters_names) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=clusters_names,y=Percent, fill = cxcl13_cxcr5)) +
+  geom_col() +
+  scale_fill_manual(name = NULL, values = cd4cols[c(1,4,10,13)]) +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  labs(fill = "Sample") +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10)) 
+
+DimPlot(finalCD4_tph_tfh, group.by = "cxcl13_cxcr5", cols = cd4cols[c(1,4,10,13)], split.by = "cxcl13_cxcr5", ncol = 2) + ggtitle(NULL) +
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.title = element_text(size = 10),
+        legend.key.size = unit(0.35, 'cm'))
+
+FeaturePlot(finalCD4_tph_tfh, features = c("CXCR5", "CXCL13", "MAF", "PDCD1", "BCL6", "CD200", "TIGIT", "TOX2", "IL21", "LAG3", "BTLA", "TNFRSF18"), order = T, cols = rev(c("black", "gray90"))) &
+  theme(title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+finalCD4_tph_tfh$clust_cxcl13_cxcr5 <- paste0(finalCD4_tph_tfh$clusters_names, " (", finalCD4_tph_tfh$cxcl13_cxcr5, ")")
+
+finalCD4_tph_tfh@meta.data %>%
+  group_by(clusters_names, cxcr5, sampleTissue_Pub) %>%
+  dplyr::count() %>%
+  group_by(clusters_names, sampleTissue_Pub) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=clusters_names,y=n, fill = cxcr5)) +
+  geom_col() + facet_wrap(~sampleTissue_Pub) +
+  scale_fill_manual(name = NULL, values = cd4cols[c(3,4)]) +
+  ggtitle(NULL) +
+  labs(fill = "Sample") +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10)) 
+
+finalCD4_tph_tfh@meta.data %>%
+  group_by(clusters_names, cxcr5, sampleTissue_Pub) %>%
+  dplyr::count() %>%
+  group_by(clusters_names, sampleTissue_Pub) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=clusters_names,y=Percent, fill = cxcr5)) +
+  geom_col() + facet_wrap(~sampleTissue_Pub) +
+  scale_fill_manual(name = NULL, values = cd4cols[c(3,4)]) +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  labs(fill = "Sample") +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10)) 
+
+Idents(finalCD4_tph_tfh) <- finalCD4_tph_tfh$clust_cxcl13_cxcr5
+cxcl13poscxcr5neg_deg <- FindMarkers(finalCD4_tph_tfh, ident.1 = "Tph (CXCL13+CXCR5-)", ident.2 = "Tfh/Tph (CXCL13+CXCR5-)", logfc.threshold = 0)
+EnhancedVolcano::EnhancedVolcano(cxcl13poscxcr5neg_deg, lab = as.character(rownames(cxcl13poscxcr5neg_deg)), x = 'avg_log2FC', y = 'p_val_adj', title = "CXCL13+CXCR5-", 
+                                 subtitle = NULL, legendPosition = 'none', legendLabels = NULL, 
+                                 caption = NULL, drawConnectors = TRUE, arrowheads = FALSE, labSize = 3, 
+                                 FCcutoff = 1, pCutoff = 10e-5) + theme_classic()
+
+tfh_cxcl13cxcr5_deg <- FindMarkers(finalCD4_tph_tfh, ident.1 = "Tfh/Tph (CXCL13-CXCR5+)", ident.2 = "Tfh/Tph (CXCL13+CXCR5-)", logfc.threshold = 0)
+EnhancedVolcano::EnhancedVolcano(tfh_cxcl13cxcr5_deg, lab = as.character(rownames(tfh_cxcl13cxcr5_deg)), x = 'avg_log2FC', y = 'p_val_adj', title = "CXCL13+CXCR5-", 
+                                 subtitle = NULL, legendPosition = 'none', legendLabels = NULL, 
+                                 caption = NULL, drawConnectors = TRUE, arrowheads = FALSE, labSize = 3, 
+                                 FCcutoff = 0.5, pCutoff = 10e-5) + theme_classic()
+
+finalCD4_tfh <- subset(finalCD4_tph_tfh, idents = "Tfh/Tph")
+Idents(finalCD4_tfh) <- finalCD4_tfh$cxcr5
+
+tfh_cxcr5_deg <- FindMarkers(finalCD4_tfh, ident.1 = "CXCR5+", ident.2 = "CXCR5-", logfc.threshold = 0)
+EnhancedVolcano::EnhancedVolcano(tfh_cxcr5_deg, lab = as.character(rownames(tfh_cxcr5_deg)), x = 'avg_log2FC', y = 'p_val_adj', title = "Tfh/Tph Cluster", 
+                                 subtitle = NULL, legendPosition = 'none', legendLabels = NULL, 
+                                 caption = NULL, drawConnectors = TRUE, arrowheads = FALSE, labSize = 3, 
+                                 FCcutoff = 0.25, pCutoff = 10e-3) + theme_classic()
+
+a <- finalCD4_tfh@meta.data %>% 
+  group_by(sample_ID_Pub, cxcr5, tissue_source) %>%
+  add_tally() %>% 
+  ungroup() %>% group_by(sample_ID_Pub, cxcr5, tissue_source) %>%
+  mutate(mean = mean(Tfh_sig1)) %>% distinct(sample_ID_Pub, cxcr5, tissue_source, .keep_all=T) %>% 
+  select(mean) %>% ungroup(sample_ID_Pub, cxcr5) %>% pairwise_t_test(mean ~ cxcr5) %>% 
+  add_significance() %>% add_xy_position(x = "tissue_source")
+
+finalCD4_tfh@meta.data %>% 
+  group_by(sample_ID_Pub, cxcr5, tissue_source) %>%
+  add_tally() %>% 
+  ungroup() %>% group_by(sample_ID_Pub, cxcr5, tissue_source) %>%
+  mutate(mean = mean(Tfh_sig1)) %>% distinct(sample_ID_Pub, cxcr5, tissue_source, .keep_all=T) %>% select(mean) %>%
+  ggplot(aes(x= cxcr5, y = mean)) + facet_wrap(~tissue_source) +
+  geom_boxplot(fill = cd4cols[8]) + geom_point() %>%
+  stat_pvalue_manual(a) +
+  xlab(NULL) + ylab("Tfh Signature") +
+  theme_classic() + 
+  theme(axis.title.y = element_text(size = 10)) 
+
+
+finalCD4_tph_tfh_clonal <- subset(finalCD4_tph_tfh, subset = clonal == "Yes")
+
+tph_13pos_5pos <- finalCD4_tph_tfh_clonal@meta.data %>% filter(clust_cxcl13_cxcr5 == "Tph (CXCL13+CXCR5+)") %>% select(CTaa) %>% na.omit() %>% distinct(CTaa)
+tph_13pos_5pos <- "NA"
+
+tph_13pos_5neg <- finalCD4_tph_tfh_clonal@meta.data %>% filter(clust_cxcl13_cxcr5 == "Tph (CXCL13+CXCR5-)") %>% select(CTaa) %>% na.omit() %>% distinct(CTaa)
+tph_13pos_5neg <- tph_13pos_5neg$CTaa
+
+tph_13neg_5pos <- finalCD4_tph_tfh_clonal@meta.data %>% filter(clust_cxcl13_cxcr5 == "Tph (CXCL13-CXCR5+)") %>% select(CTaa) %>% na.omit() %>% distinct(CTaa)
+tph_13neg_5pos <- tph_13neg_5pos$CTaa
+
+tph_13neg_5neg <- finalCD4_tph_tfh_clonal@meta.data %>% filter(clust_cxcl13_cxcr5 == "Tph (CXCL13-CXCR5-)") %>% select(CTaa) %>% na.omit() %>% distinct(CTaa)
+tph_13neg_5neg <- tph_13neg_5neg$CTaa
+
+tfh_13pos_5pos <- finalCD4_tph_tfh_clonal@meta.data %>% filter(clust_cxcl13_cxcr5 == "Tfh/Tph (CXCL13+CXCR5+)") %>% select(CTaa) %>% na.omit() %>% distinct(CTaa)
+tfh_13pos_5pos <- tfh_13pos_5pos$CTaa
+
+tfh_13pos_5neg <- finalCD4_tph_tfh_clonal@meta.data %>% filter(clust_cxcl13_cxcr5 == "Tfh/Tph (CXCL13+CXCR5-)") %>% select(CTaa) %>% na.omit() %>% distinct(CTaa)
+tfh_13pos_5neg <- tfh_13pos_5neg$CTaa
+
+tfh_13neg_5pos <- finalCD4_tph_tfh_clonal@meta.data %>% filter(clust_cxcl13_cxcr5 == "Tfh/Tph (CXCL13-CXCR5+)") %>% select(CTaa) %>% na.omit() %>% distinct(CTaa)
+tfh_13neg_5pos <- tfh_13neg_5pos$CTaa
+
+tfh_13neg_5neg <- finalCD4_tph_tfh_clonal@meta.data %>% filter(clust_cxcl13_cxcr5 == "Tfh/Tph (CXCL13-CXCR5-)") %>% select(CTaa) %>% na.omit() %>% distinct(CTaa)
+tfh_13neg_5neg <- tfh_13neg_5neg$CTaa
+
+treg25hiclones <- finalCD4@meta.data %>% filter(clusters_names == "CD25-high Treg") %>% filter(clonal == "Yes") %>% select(CTaa) %>% na.omit() %>% distinct(CTaa)
+treg25hiclones <- treg25hiclones$CTaa
+
+treg25loclones <- finalCD4@meta.data %>% filter(clusters_names == "CD25-low Treg") %>% filter(clonal == "Yes") %>% select(CTaa) %>% na.omit() %>% distinct(CTaa)
+treg25loclones <- treg25loclones$CTaa
+
+list_clones_allclust <- list("Treg (CD25lo)" = treg25loclones, "Treg (CD25hi)" = treg25hiclones, "Tph (CXCL13+CXCR5+)" = tph_13pos_5pos, "Tph (CXCL13+CXCR5-)" = tph_13pos_5neg, "Tph (CXCL13-CXCR5+)" = tph_13neg_5pos, "Tph (CXCL13-CXCR5-)" = tph_13neg_5neg,
+                             "Tfh/Tph (CXCL13+CXCR5+)" = tfh_13pos_5pos, "Tfh/Tph (CXCL13+CXCR5-)" = tfh_13pos_5neg, "Tfh/Tph (CXCL13-CXCR5+)" = tfh_13neg_5pos, "Tfh/Tph (CXCL13-CXCR5-)" = tfh_13neg_5neg)
+
+upset(fromList(list_clones_allclust), sets = c("Treg (CD25lo)", "Treg (CD25hi)", "Tfh/Tph (CXCL13-CXCR5-)", "Tfh/Tph (CXCL13-CXCR5+)", "Tfh/Tph (CXCL13+CXCR5-)", "Tfh/Tph (CXCL13+CXCR5+)",
+                                                  "Tph (CXCL13-CXCR5-)", "Tph (CXCL13-CXCR5+)", "Tph (CXCL13+CXCR5-)", "Tph (CXCL13+CXCR5+)"), 
+      keep.order = T, mainbar.y.label = "Number of \nOverlapping Clones", sets.x.label = "Clones >1 cell", order.by = "freq")
+
+tphtfh_overlap <- intersect(tph_13pos_5neg, tfh_13pos_5pos)
+tph_tfh_overlap_seurat <- subset(finalCD4_tph_tfh, subset = CTaa %in% c(tphtfh_overlap))
+
+tph_tfh_overlap_meta <- tph_tfh_overlap_seurat@meta.data %>% select(cellnum, CTaa, clusters_names, tissue_source, sample_ID_Pub)
+rownames(tph_tfh_overlap_meta) <- paste0("RNA.", rownames(tph_tfh_overlap_meta))
+
+pseudobulk_tphtfh_overlap <- AverageExpression(tph_tfh_overlap_seurat, group.by = "cellnum", features = c("CXCR5", "CXCL13", "MAF", "PDCD1", "BCL6", "CD200", "TIGIT", "TOX2", "IL21", "LAG3", "BTLA", "TNFRSF18"), assays = "RNA", slot = "scale.data")
+pseudobulk_tphtfh_overlap <- as.data.frame(pseudobulk_tphtfh_overlap)
+pseudobulk_tphtfh_overlap <- pseudobulk_tphtfh_overlap[,c(3,8,9,10,11,1,2,4,5,6,7)]
+
+ha <- HeatmapAnnotation(
+  Clone = tph_tfh_overlap_meta$CTaa,
+  Cluster = tph_tfh_overlap_meta$clusters_names,
+  Patient = tph_tfh_overlap_meta$sample_ID_Pub,
+  Tissue = tph_tfh_overlap_meta$tissue_source,
+  col = list(Cluster = c("Tph" = cd4cols[8], "Tfh/Tph" = cd4cols[7]),
+             Tissue = c("SYN" = "#f2a21e", "PBL" = "#88a0c4")),
+  annotation_name_gp = gpar(fontsize = 10))
+
+Heatmap(as.matrix(pseudobulk_tphtfh_overlap), col = col_fun, cluster_rows = F, column_order = paste0("RNA.", unique(tph_tfh_overlap_seurat$cellnum)), top_annotation = ha)
+
+sharedtph <- finalCD4@meta.data %>% 
+  group_by(sample_ID_Pub, CTaa) %>%
+  add_tally() %>% filter(clusters_names == "Tph") %>%
+  group_by(sample_ID_Pub, CTaa) %>% add_tally() %>% na.omit(CTaa) %>% distinct(sample_ID_Pub, CTaa, .keep_all = T) %>% ungroup() %>% 
+  mutate(diff = n - nn) %>% filter(diff > 0) %>%
+  arrange(desc(n)) %>% select(CTaa, sample_ID_Pub, n) %>%
+  mutate(sample_clone = paste0(sample_ID_Pub, "-", CTaa))
+
+sharedtphbycluster<- finalCD4@meta.data %>% 
+  mutate(sample_clone = paste0(sample_ID_Pub, "-", CTaa)) %>%
+  filter(sample_clone %in% sharedtph$sample_clone) %>% group_by(sample_clone, clusters_names) %>% dplyr::count() 
+
+sharedtphbycluster$sample_clone <- factor(sharedtphbycluster$sample_clone, levels = c(sharedtph$sample_clone))
+
+sharedtphbycluster %>%
+  ggplot(aes(x = sample_clone, y = n, fill = clusters_names)) + geom_col() +
+  scale_fill_manual(name = NULL, values = cd4cols, drop = FALSE) +
+  scale_x_discrete(labels = substr(top20tph$sample_clone, 1, 4)) +
+  theme_classic() + RotatedAxis() +
+  ylab("Cells in Clone") + xlab("Clone") +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title = element_text(size = 9),
+        legend.key.size = unit(0.35, 'cm')) 
+
+
+Idents(finalCD4) <- finalCD4$CTaa
+DimPlot(finalCD4, cells.highlight = WhichCells(finalCD4, idents = sharedtph$CTaa))
+DimPlot(finalCD4, cells.highlight = list(WhichCells(finalCD4, idents = sharedtph$CTaa[1]), WhichCells(finalCD4, idents = sharedtph$CTaa[2])))
+DimPlot(finalCD4, cells.highlight = list(WhichCells(finalCD4, idents = sharedtph$CTaa[1]), WhichCells(finalCD4, idents = sharedtph$CTaa[2]), 
+                                         WhichCells(finalCD4, idents = sharedtph$CTaa[3]), WhichCells(finalCD4, idents = sharedtph$CTaa[4]), 
+                                         WhichCells(finalCD4, idents = sharedtph$CTaa[5]), WhichCells(finalCD4, idents = sharedtph$CTaa[6]), 
+                                         WhichCells(finalCD4, idents = sharedtph$CTaa[7]), WhichCells(finalCD4, idents = sharedtph$CTaa[8]), 
+                                         WhichCells(finalCD4, idents = sharedtph$CTaa[9]), WhichCells(finalCD4, idents = sharedtph$CTaa[10]),
+                                         WhichCells(finalCD4, idents = sharedtph$CTaa[11]), WhichCells(finalCD4, idents = sharedtph$CTaa[12]), 
+                                         WhichCells(finalCD4, idents = sharedtph$CTaa[13]), WhichCells(finalCD4, idents = sharedtph$CTaa[14]), 
+                                         WhichCells(finalCD4, idents = sharedtph$CTaa[15]), WhichCells(finalCD4, idents = sharedtph$CTaa[16]), 
+                                         WhichCells(finalCD4, idents = sharedtph$CTaa[17]), WhichCells(finalCD4, idents = sharedtph$CTaa[18]), 
+                                         WhichCells(finalCD4, idents = sharedtph$CTaa[19]), WhichCells(finalCD4, idents = sharedtph$CTaa[20])), 
+        cols.highlight = c(cd8cols, cd4cols))
+
+Idents(finalCD4) <- finalCD4$clusters_names
+
+
+
+
+#looking at signature across all clusters
+alleffectorstat <- finalCD4@meta.data %>% filter(clonal != "No TCR") %>% 
+  filter(tissue_source == "SYN") %>% filter(clusters_names != "ISG-high") %>% filter(clusters_names != "Proliferating") %>% 
+  group_by(sample_ID_Pub, CTaa, clusters_names) %>%
+  add_tally() %>% mutate(clonal = ifelse(n == 1, "No", "Yes")) %>% 
+  ungroup() %>% group_by(sample_ID_Pub, clonal, clusters_names) %>%
+  mutate(effectormean = mean(Effector_sig1)) %>% distinct(sample_ID_Pub, clonal, clusters_names, .keep_all=T) %>% 
+  select(effectormean) %>% ungroup(sample_ID_Pub, clonal) %>% 
+  pairwise_t_test(effectormean ~ clonal) %>% add_significance() %>% add_xy_position(x = "clonal")
+
+finalCD4@meta.data %>% filter(clonal != "No TCR") %>% 
+  filter(tissue_source == "SYN") %>%
+  group_by(sample_ID_Pub, CTaa, clusters_names) %>%
+  add_tally() %>% mutate(clonal = ifelse(n == 1, "No", "Yes")) %>% 
+  ungroup() %>% group_by(sample_ID_Pub, clonal, clusters_names) %>%
+  mutate(effectormean = mean(Effector_sig1)) %>% distinct(sample_ID_Pub, clonal, clusters_names, .keep_all=T) %>% select(effectormean) %>%
+  ggplot(aes(x= clonal, y = effectormean)) + geom_boxplot() + facet_wrap(~clusters_names) +
+  stat_pvalue_manual(alleffectorstat) +
+  scale_x_discrete(labels = c("= 1", " > 1")) + ggtitle("Tph Cluster") + xlab(NULL) + ylab("Effectorness Signature") +
+  theme_classic() + 
+  theme(axis.title.y = element_text(size = 10)) 
+
+#finalCD4_SYN_tph$sample_clonal <-
+
+#tph blood cells
+finalCD4_PBL_tph <- subset(finalCD4_PBL, subset = clusters_names == "Tph")
+Idents(finalCD4_PBL_tph) <- finalCD4_PBL_tph$clonal
+tph_pbl_clonal_DEG <- FindMarkers(finalCD4_PBL_tph, ident.1 = "Yes", ident.2 = "No")
+tph_pbl_clonal_DEGpos <- FindMarkers(finalCD4_PBL_tph, ident.1 = "Yes", ident.2 = "No", only.pos = T)
+
+
+
+
+
+finalcd4_tcrbycluster <- expression2List(finalCD4_clonal, group = "clusters_names")
+clonalOverlap(finalcd4_tcrbycluster, cloneCall = "aa", method = "morisita")
+
+finalcd4_morisita <- clonalOverlap(finalcd4_tcrbycluster, cloneCall = "aa", method = "morisita", exportTable = T)
+finalcd4_morisita$names <- NULL
+finalcd4_morisita <- as.matrix(finalcd4_morisita)
+finalcd4_morisita <- Matrix::forceSymmetric(finalcd4_morisita,uplo="U")
+finalcd4_morisita <- as.matrix(finalcd4_morisita)
+class(finalcd4_morisita) <- c("immunr_ov_matrix", "matrix", "array")
+vis(finalcd4_morisita) + 
+  scale_y_discrete(labels=rev(levels(finalCD4$clusters_names))) + 
+  scale_x_discrete(labels=levels(finalCD4$clusters_names)) + 
+  guides(fill = guide_colorbar(title="Morisita \nIndex")) +
+  ggtitle(NULL) + xlab(NULL) + ylab(NULL) +
+  scale_fill_distiller(palette = "Blues", direction = 1) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 1),
+        axis.text=element_text(size=10)) 
+
+mcpasTCRs <- read.csv("~/Downloads/McPAS-TCR.csv")
+mcpasTCRs_pathogen <- mcpasTCRs %>%
+  filter(Species == "Human") %>%
+  filter(Category == "Pathogens")
+mcpasTCRs_human <- mcpasTCRs %>%
+  filter(Species == "Human")
+
+CD4_pathogen_public <- finalCD4@meta.data %>%
+  separate(CTaa, into = c("alpha", "beta"), sep="_(?=[^_]+$)") %>%
+  mutate(public_pathogen = if_else(beta %in% mcpasTCRs_pathogen$CDR3.beta.aa, 
+                                   if_else(alpha %in% mcpasTCRs_pathogen$CDR3.beta.aa, "Both Public", "Beta Public"), 
+                                   if_else(alpha %in% mcpasTCRs_pathogen$CDR3.beta.aa, "Alpha Public", "Both Private"))) %>%
+  mutate(public_pathogen = ifelse(is.na(CTnt),"No TCR",public_pathogen))
+
+CD4_all_public <- finalCD4@meta.data %>%
+  separate(CTaa, into = c("alpha", "beta"), sep="_(?=[^_]+$)") %>%
+  mutate(public_any = if_else(beta %in% mcpasTCRs_human$CDR3.beta.aa, 
+                              if_else(alpha %in% mcpasTCRs_human$CDR3.beta.aa, "Both Public", "Beta Public"), 
+                              if_else(alpha %in% mcpasTCRs_human$CDR3.beta.aa, "Alpha Public", "Both Private"))) %>%
+  mutate(public_any = ifelse(is.na(CTnt),"No TCR",public_any))
+
+CD4_pathogen_public %>%
+  group_by(clusters_names, public_pathogen) %>%
+  dplyr::count() %>%
+  group_by(clusters_names) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=clusters_names,y=Percent, fill=public_pathogen)) +
+  geom_col() +
+  scale_fill_brewer(palette = "Spectral", direction = 1, name = "Publicity \n(Pathogens)") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  ylab(NULL) +
+  xlab(NULL) + 
+  theme_classic() 
+
+CD4_all_public %>%
+  group_by(seurat_clusters, public_any) %>%
+  dplyr::count() %>%
+  group_by(seurat_clusters) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=seurat_clusters,y=Percent, fill=public_any)) +
+  geom_col() +
+  scale_fill_brewer(palette = "Spectral", direction = 1, name = "Publicity \n(All McPAS)") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  ylab(NULL) +
+  xlab(NULL) + 
+  theme_classic() 
+
+CD4_pathogen_public %>% filter(cloneTissueNum != "No TCR") %>% filter(public_pathogen == "Beta Public") %>%
+  group_by(cloneTissueCombinedCatNum, public_pathogen) %>%
+  dplyr::count() %>%
+  group_by(cloneTissueCombinedCatNum) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=cloneTissueCombinedCatNum,y=n/sum(n), fill=public_pathogen)) +
+  geom_col() +
+  scale_fill_brewer(palette = "Set1", direction = 1, name = "Publicity \n(Pathogens)") +
+  ggtitle(NULL) +
+  ylab(NULL) +
+  xlab(NULL) + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1))
+
+CD4_pathogen_public %>%
+  group_by(CTnt, public_pathogen, tissue_source) %>% count() %>%
+  spread(tissue_source, n) %>%
+  replace_na(list(SYN = 0, PBL = 0)) %>%
+  ggplot(aes(x = PBL, y = SYN, color = public_pathogen)) + 
+  geom_point(position = position_jitter(width = 0.1, height = 0.1)) + 
+  scale_x_continuous(trans=scales::pseudo_log_trans(base = 10), breaks = c(0, 1, 10, 100, 500), limits = c(0, 500)) + 
+  scale_y_continuous(trans=scales::pseudo_log_trans(base = 10), breaks = c(0, 1, 10, 100, 500), limits = c(0, 500)) + 
+  scale_color_manual(values = c("lightgrey", "red", "lightgrey", "lightgrey")) 
+
+
+cd4naivefeat <- FeaturePlot(finalCD4, features = "Naive_sig1") + 
+  scale_color_distiller(palette = "Reds", direction = 1) + ggtitle("Naive") +
+  theme(plot.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+cd4actfeat <- FeaturePlot(finalCD4, features = "Activation_sig1") + 
+  scale_color_distiller(palette = "Reds", direction = 1) + ggtitle("Activation") +
+  theme(plot.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+cd4cytotoxfeat <- FeaturePlot(finalCD4, features = "Cytotoxic_sig1") + 
+  scale_color_distiller(palette = "Reds", direction = 1) + ggtitle("Cytotoxicity") +
+  theme(plot.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+cd4trmfeat <- FeaturePlot(finalCD4, features = "Trm_sig1") + 
+  scale_color_distiller(palette = "Reds", direction = 1) + ggtitle("Trm") +
+  theme(plot.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+cd4mitofeat <- FeaturePlot(finalCD4, features = "subsets_Mito_percent") + 
+  scale_color_distiller(palette = "Reds", direction = 1) + ggtitle("Mito Reads") +
+  theme(plot.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+
+cd4naivefeat | cd4actfeat | cd4cytotoxfeat
+ggsave("CD4_featureplot_naive_trm_cytotox.eps", width = 6, height = 2)
+
+finalCD4$patientCTaa <- ifelse(is.na(finalCD4$CTaa), "No TCR", 
+                               paste0(finalCD4$sample_ID_Pub, "-", finalCD4$CTaa))
+
+clonesbypt <- table(finalCD4$patientCTaa, finalCD4$tissue_source)
+write.csv(clonesbypt, file = "CD4clones_byPatient_tissueSplit.csv")
+
+write.csv(finalCD4@meta.data, "finalCD4_metadata.csv")
+
+cloneCategorySample <- read.csv("finalCD4_metadata_sampleCloneInformation.csv", row.names = 1)
+finalCD4 <- AddMetaData(finalCD4, cloneCategorySample)
+
+Idents(finalCD4) <- finalCD4$cloneTissueCategory
+current.cluster.ids <- c("Blood Enriched", "Blood Expanded", "Blood Singlet", "Dual Expanded", "Dual Unexpanded", "No TCR", "Tissue Enriched", "Tissue Expanded", "Tissue Singlet")
+new.cluster.ids <- c("Both", "Blood Only", "Blood Only", "Both", "Both", "No TCR", "Both", "Tissue Only", "Tissue Only")
+finalCD4@active.ident <- plyr::mapvalues(x = finalCD4@active.ident, from = current.cluster.ids, to = new.cluster.ids)
+finalCD4$cloneTissueCategoryCollapsed <- finalCD4@active.ident
+
+
+finalCD4@meta.data %>%
+  group_by(seurat_clusters, cloneTissueCombinedCatNum) %>%
+  dplyr::count() %>%
+  group_by(seurat_clusters) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=seurat_clusters,y=Percent, fill = cloneTissueCombinedCatNum)) +
+  geom_col() +
+  scale_fill_brewer(palette = "Paired") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  labs(fill = "Category") +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10)) 
+
+finalCD4@meta.data %>%
+  group_by(cloneTissueCombinedCatNum, seurat_clusters) %>%
+  dplyr::count() %>%
+  group_by(cloneTissueCombinedCatNum) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=cloneTissueCombinedCatNum,y=Percent, fill = seurat_clusters)) +
+  geom_col() +
+  scale_fill_manual(values = cd8cols) +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  labs(fill = "Category") +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10)) 
+
+finalCD4$seurat_clusters <- paste0("C", finalCD4$seurat_clusters)
+Idents(finalCD4) <- finalCD4$seurat_clusters
+finalCD4_DEGsforpathway <- FindAllMarkers(object=finalCD4, only.pos = TRUE, logfc.threshold = 0.50, min.pct = 0.30)
+
+dbs <- c("GO_Molecular_Function_2015", "GO_Cellular_Component_2015", "GO_Biological_Process_2015", "KEGG_2021_Human")
+
+enriched_0 <- enrichr(c(finalCD4_DEGsforpathway$gene[grep("C0", finalCD4_DEGsforpathway$cluster)]), dbs)
+enriched_0 <- lapply(enriched_0, function(x) 
+  cbind(x, Cluster = "C0"))
+enriched_1 <- enrichr(c(finalCD4_DEGsforpathway$gene[grep("\\bC1\\b", finalCD4_DEGsforpathway$cluster)]), dbs)
+enriched_1 <- lapply(enriched_1, function(x) 
+  cbind(x, Cluster = "C1"))
+enriched_2 <- enrichr(c(finalCD4_DEGsforpathway$gene[grep("C2", finalCD4_DEGsforpathway$cluster)]), dbs)
+enriched_2 <- lapply(enriched_2, function(x) 
+  cbind(x, Cluster = "C2"))
+enriched_3 <- enrichr(c(finalCD4_DEGsforpathway$gene[grep("C3", finalCD4_DEGsforpathway$cluster)]), dbs)
+enriched_3 <- lapply(enriched_3, function(x) 
+  cbind(x, Cluster = "C3"))
+enriched_4 <- enrichr(c(finalCD4_DEGsforpathway$gene[grep("C4", finalCD4_DEGsforpathway$cluster)]), dbs)
+enriched_4 <- lapply(enriched_4, function(x) 
+  cbind(x, Cluster = "C4"))
+enriched_5 <- enrichr(c(finalCD4_DEGsforpathway$gene[grep("C5", finalCD4_DEGsforpathway$cluster)]), dbs)
+enriched_5 <- lapply(enriched_5, function(x) 
+  cbind(x, Cluster = "C5"))
+enriched_6 <- enrichr(c(finalCD4_DEGsforpathway$gene[grep("C6", finalCD4_DEGsforpathway$cluster)]), dbs)
+enriched_6 <- lapply(enriched_6, function(x) 
+  cbind(x, Cluster = "C6"))
+enriched_7 <- enrichr(c(finalCD4_DEGsforpathway$gene[grep("C7", finalCD4_DEGsforpathway$cluster)]), dbs)
+enriched_7 <- lapply(enriched_7, function(x) 
+  cbind(x, Cluster = "C7"))
+enriched_8 <- enrichr(c(finalCD4_DEGsforpathway$gene[grep("C8", finalCD4_DEGsforpathway$cluster)]), dbs)
+enriched_8 <- lapply(enriched_8, function(x) 
+  cbind(x, Cluster = "C8"))
+enriched_9 <- enrichr(c(finalCD4_DEGsforpathway$gene[grep("C9", finalCD4_DEGsforpathway$cluster)]), dbs)
+enriched_9 <- lapply(enriched_9, function(x) 
+  cbind(x, Cluster = "C9"))
+enriched_10 <- enrichr(c(finalCD4_DEGsforpathway$gene[grep("C10", finalCD4_DEGsforpathway$cluster)]), dbs)
+enriched_10 <- lapply(enriched_10, function(x) 
+  cbind(x, Cluster = "C10"))
+enriched_11 <- enrichr(c(finalCD4_DEGsforpathway$gene[grep("C11", finalCD4_DEGsforpathway$cluster)]), dbs)
+enriched_11 <- lapply(enriched_11, function(x) 
+  cbind(x, Cluster = "C11"))
+
+GObiologicalprocess_top5 <- rbind(enriched_0$GO_Biological_Process_2015[1:3,c(1,4,10)], 
+                                  enriched_1$GO_Biological_Process_2015[1:3,c(1,4,10)], enriched_2$GO_Biological_Process_2015[1:3,c(1,4,10)],
+                                  enriched_3$GO_Biological_Process_2015[1:3,c(1,4,10)], enriched_4$GO_Biological_Process_2015[1:3,c(1,4,10)],
+                                  enriched_5$GO_Biological_Process_2015[1:3,c(1,4,10)], enriched_6$GO_Biological_Process_2015[1:3,c(1,4,10)],
+                                  enriched_7$GO_Biological_Process_2015[1:3,c(1,4,10)], enriched_8$GO_Biological_Process_2015[1:3,c(1,4,10)],
+                                  enriched_9$GO_Biological_Process_2015[1:3,c(1,4,10)], enriched_10$GO_Biological_Process_2015[1:3,c(1,4,10)],
+                                  enriched_11$GO_Biological_Process_2015[1:3,c(1,4,10)])
+GObiologicalprocess_top5$TermCluster <- paste0(GObiologicalprocess_top5$Term, GObiologicalprocess_top5$Cluster)
+GObiologicalprocess_top5$TermCluster <- factor(GObiologicalprocess_top5$TermCluster,levels = c(GObiologicalprocess_top5$TermCluster))
+
+ggplot(GObiologicalprocess_top5, aes(x=TermCluster, y=-log(Adjusted.P.value))) +
+  geom_segment(aes(x=TermCluster, xend=TermCluster, y=0, yend=-log(Adjusted.P.value), color = Cluster)) +
+  geom_point( aes(color=Cluster), size=4) +
+  scale_color_manual(values = cd4cols) + 
+  scale_x_discrete(labels = rev(GObiologicalprocess_top5$Term), limits = rev(levels(GObiologicalprocess_top5$TermCluster))) + 
+  scale_y_continuous(expand = expansion(mult = c(0, .1))) +
+  xlab(NULL) + ylab("-log(Adjusted P Value)") +
+  theme_classic() +
+  coord_flip()
+
