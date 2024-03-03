@@ -1,0 +1,784 @@
+library(Seurat)
+library(dplyr)
+library(harmony)
+library(symphony)
+library(ggplot2)
+library(RColorBrewer)
+library(scRepertoire)
+library(patchwork)
+library(cowplot)
+library(pheatmap)
+library(ggpubr)
+library(rstatix)
+library(tidyr)
+library(stringr)
+library(circlize)
+library(ComplexHeatmap)
+library(CellChat)
+library(UpSetR)
+source("/Users/gdunlap/Desktop/Rao_Lab/AMP_Phase_2/manuscript/AMP_manuscript_functions.R")
+
+
+setwd("/Users/gdunlap/Desktop/Rao_Lab/AMP_Phase_2/manuscript/analysis/")
+
+# Pre single-cell analysis -----------------------------------------------------
+
+patientmetadata <- read.csv("/Users/gdunlap/Desktop/Rao_Lab/AMP_Phase_2/metadata/amp_ra_repertoire_patientInfo_abbreviated.csv")
+
+patientmetadata_heatmap_nums <- patientmetadata %>% select(id, blood_cells_QC, synovial_cells_QC)
+rownames(patientmetadata_heatmap_nums) <- patientmetadata_heatmap_nums$id
+patientmetadata_heatmap_nums$id <- NULL
+patientmetadata_heatmap_nums$blood_cells_QC <- as.numeric(patientmetadata_heatmap_nums$blood_cells_QC)
+patientmetadata_heatmap_nums$synovial_cells_QC <- as.numeric(patientmetadata_heatmap_nums$synovial_cells_QC)
+
+patientmetadata$CTAP <- factor(patientmetadata$CTAP, 
+                               levels = c("M", "T + B", "T + F", "F", "E + F + M", "No info"))
+patientmetadata$seropositive <- factor(patientmetadata$seropositive, 
+                               levels = c("Yes", "No", "No info"))
+patientmetadata$pathotype <- factor(patientmetadata$pathotype, 
+                                       levels = c("Lymphoid", "Pauci-Immune", "No info"))
+
+current.treatment <- unique(patientmetadata$treatment_group)
+new.treatment <- c("MTX inadequate responder", "Treatment naive", "TNF inadequate responder", "No info")
+patientmetadata$treatment_group <- plyr::mapvalues(x = patientmetadata$treatment_group, from = current.treatment, to = new.treatment)
+patientmetadata$treatment_group <- factor(patientmetadata$treatment_group, 
+                                          levels = c("Treatment naive", "MTX inadequate responder", "TNF inadequate responder", "No info"))
+
+patientmetadata$cdai_cat <- ifelse(patientmetadata$cdai_V0 < 10, "Low",
+                                   ifelse(patientmetadata$cdai_V0 > 22.1, "High (CDAI > 22)", "Moderate (10 < CDAI <= 22)"))
+
+col_fun_patientmetadata = colorRamp2(c(8000, 0), c("#660000",  "white"))
+col_fun_age = colorRamp2(c(80, 20), c("#023e7d",  "white"))
+col_fun_dur = colorRamp2(c(60, 0), c("#023e7d",  "white"))
+
+ha = HeatmapAnnotation(
+  Age = patientmetadata$age,
+  Sex = patientmetadata$sex,
+  'Sample Type' = patientmetadata$collection,
+  'RA Duration' = patientmetadata$RA_duration,
+  'Disease Activity (CDAI)' = patientmetadata$cdai_cat,
+  Treatment = patientmetadata$treatment_group,
+  Seropositive = patientmetadata$seropositive,
+  Pathotype = patientmetadata$pathotype,
+  CTAP = patientmetadata$CTAP,
+  col = list(Age = col_fun_age,
+             Sex = c("Female" = "#7f3d98", "Male" = "#223f98"),
+             CTAP = c("M" = "#9d1b44", "T + B" = "#fbe08b", "T + F" = "#e2ea99", "F" = "#acd7a5", "E + F + M" = "#65c3a5", "No info" = "#404040"),
+             Seropositive = c("Yes" = "#d858a0", "No" = "#8ed6e6", "No info" = "#404040"),
+             'Sample Type' = c("Arthroplasty" = "#8cb369", "Biopsy" = "#f4a259", "Synovectomy" = "#62b6cb"),
+             'RA Duration' = col_fun_dur,
+             Treatment = c("Treatment naive" = "#86cfc4", "MTX inadequate responder" = "#f4f6f7", "TNF inadequate responder" = "#dfc07d", "No info" = "#404040"),
+             'Disease Activity (CDAI)' = c("Moderate (10 < CDAI <= 22)" = "#e36414", "High (CDAI > 22)" = "#9e2a2b"),
+             Pathotype = c("Lymphoid" = "#8B9474", "Pauci-Immune" = "#8BBD8B", "No info" = "#404040")
+             ),
+  annotation_name_gp= gpar(fontsize = 10), gp = gpar(col = "white", lwd = 0.5)
+)
+
+metadataheatmap <- Heatmap(t(patientmetadata_heatmap_nums), cluster_columns = F, cluster_rows = F, col = col_fun_patientmetadata,
+        heatmap_legend_param = list(title = "# Cells"), row_labels = c("Blood", "Synovial\nTissue"), column_names_rot = 45, column_names_centered = F, 
+        column_names_gp = gpar(fontsize = 10), row_names_gp = gpar(fontsize = 10),
+        rect_gp = gpar(col = "white", lwd = 0.5), na_col = "#404040", top_annotation = ha)
+
+setEPS()
+postscript("patient_metadata_heatmap.eps", width = 14, height = 3.4)
+draw(metadataheatmap)
+dev.off()
+
+flowdata <- read.csv("/Users/gdunlap/Desktop/Rao_Lab/AMP_Phase_2/manuscript/AMP2 repertoire sample flow data_051322NM_GD_edits.csv")
+
+cd3sortstat <- flowdata %>% pairwise_t_test(CD3. ~ Tissue) %>% add_significance() %>% add_xy_position(x = "Tissue")
+
+ggplot(flowdata, aes(x = Tissue, y = CD3.)) + 
+  geom_line(aes(group = Patient)) + 
+  geom_point(size = 2) + 
+  stat_pvalue_manual(cd3sortstat) +
+  theme_classic() +
+  ylab("CD3+ cells\n(as % of CD45+ cells)")
+
+cd19sortstat <- flowdata %>% pairwise_t_test(CD19. ~ Tissue) %>% add_significance() %>% add_xy_position(x = "Tissue")
+
+ggplot(flowdata, aes(x = Tissue, y = CD19.)) + 
+  geom_line(aes(group = Patient)) + 
+  geom_point(size = 2) + 
+  stat_pvalue_manual(cd19sortstat) +
+  theme_classic() +
+  ylab("CD19+ cells\n(as % of CD45+ cells)")
+
+cd19pbsortstat <- flowdata %>% pairwise_t_test(CD19.PB ~ Tissue) %>% add_significance() %>% add_xy_position(x = "Tissue")
+
+ggplot(flowdata, aes(x = Tissue, y = CD19.PB)) + 
+  geom_line(aes(group = Patient)) + 
+  geom_point(size = 2) + 
+  stat_pvalue_manual(cd19pbsortstat) +
+  theme_classic() +
+  ylab("CD19+ plasmablasts\n(as % of CD45+ cells)")
+
+
+
+# Setting up combined T and B object -----------------------------------------------------
+
+clust_30PC_res03_seurat <- readRDS("/Users/gdunlap/Desktop/Rao_Lab/AMP_Phase_2/data/mainPipeline/02clust_30PC_res03_seurat.rds")
+TBclustercolors <- c(colorRampPalette(brewer.pal(8, "Blues"))(10)[3:10], colorRampPalette(brewer.pal(8, "Purples"))(10)[8], colorRampPalette(brewer.pal(8, "Reds"))(10)[4:9], colorRampPalette(brewer.pal(8, "Greens"))(6)[4], colorRampPalette(brewer.pal(8, "Oranges"))(10)[5])
+
+Idents(clust_30PC_res03_seurat) <- clust_30PC_res03_seurat$tissue_source
+current.cluster.ids <- c("PBL", "Syn")
+new.cluster.ids <- c("PBL", "SYN")
+clust_30PC_res03_seurat@active.ident <- plyr::mapvalues(x = clust_30PC_res03_seurat@active.ident, from = current.cluster.ids, to = new.cluster.ids)
+clust_30PC_res03_seurat$tissue_source <- clust_30PC_res03_seurat@active.ident
+
+clust_30PC_res03_seurat$tissue_source <- factor(clust_30PC_res03_seurat$tissue_source, levels = c("SYN", "PBL"))
+Idents(clust_30PC_res03_seurat) <- clust_30PC_res03_seurat$tissue_source
+
+Idents(clust_30PC_res03_seurat) <- clust_30PC_res03_seurat$ident
+current.cluster.ids <- levels(clust_30PC_res03_seurat$ident)
+new.cluster.ids <- c("T cells", "T cells", "T cells", "T cells", "T cells", "T cells", "T cells", "T cells", "Proliferating", "B cells", "B cells", "B cells", "B cells", "B cells", "B cells", "Fibroblasts", "Monocytes")
+clust_30PC_res03_seurat@active.ident <- plyr::mapvalues(x = clust_30PC_res03_seurat@active.ident, from = current.cluster.ids, to = new.cluster.ids)
+clust_30PC_res03_seurat$broadident <- clust_30PC_res03_seurat@active.ident
+
+Idents(clust_30PC_res03_seurat) <- clust_30PC_res03_seurat$sample_ID
+clust_30PC_res03_seurat <- subset(clust_30PC_res03_seurat, idents = "300_0415", invert = TRUE)
+
+current.cluster.ids <- unique(clust_30PC_res03_seurat$sample_ID)
+new.cluster.ids <- c("RA01", "RA02", "RA03", "RA04", "RA05", "RA06", "RA07", "RA08", "RA09", "RA10", "RA11", "RA12")
+clust_30PC_res03_seurat@active.ident <- plyr::mapvalues(x = clust_30PC_res03_seurat@active.ident, from = current.cluster.ids, to = new.cluster.ids)
+clust_30PC_res03_seurat$sample_ID_Pub <- clust_30PC_res03_seurat@active.ident
+
+clust_30PC_res03_seurat$sampleTissue <- paste0(clust_30PC_res03_seurat$sample_ID, "_", clust_30PC_res03_seurat$tissue_source)
+clust_30PC_res03_seurat$sampleTissue_Pub <- paste0(clust_30PC_res03_seurat$sample_ID_Pub, "_", clust_30PC_res03_seurat$tissue_source)
+
+clust_30PC_res03_seurat$sampleTissue_Pub <- factor(clust_30PC_res03_seurat$sampleTissue_Pub, levels = c("RA01_SYN", "RA01_PBL", "RA02_SYN", "RA02_PBL", "RA03_SYN", "RA03_PBL", "RA04_SYN", "RA04_PBL", "RA05_SYN", "RA05_PBL", "RA06_SYN", "RA06_PBL", "RA07_SYN", "RA07_PBL", "RA08_SYN", "RA09_SYN", "RA10_SYN", "RA10_PBL", "RA11_SYN", "RA11_PBL", "RA12_SYN", "RA12_PBL"))
+
+patient_metadata <- read.csv("/Users/gdunlap/Desktop/Rao_Lab/AMP_Phase_2/metadata/amp_ra_patient_metadata_perCell.csv", row.names = 1)
+clust_30PC_res03_seurat <- AddMetaData(clust_30PC_res03_seurat, patient_metadata)
+
+tcr_metadata <- read.csv("/Users/gdunlap/Desktop/Rao_Lab/AMP_Phase_2/metadata/amp_ra_tcr_metadata_perCell.csv", row.names = 1)
+clust_30PC_res03_seurat <- AddMetaData(clust_30PC_res03_seurat, tcr_metadata)
+
+clust_30PC_res03_seurat$cloneType <- as.character(clust_30PC_res03_seurat$cloneType)
+clust_30PC_res03_seurat$cloneType <- replace_na(clust_30PC_res03_seurat$cloneType, "No TCR")
+Idents(clust_30PC_res03_seurat) <- clust_30PC_res03_seurat$cloneType
+
+slot(clust_30PC_res03_seurat, "meta.data")$cloneType <- factor(slot(clust_30PC_res03_seurat, "meta.data")$cloneType, 
+                                                   levels = c("Hyperexpanded (100 < X <= 500)", 
+                                                              "Large (20 < X <= 100)", 
+                                                              "Medium (5 < X <= 20)", 
+                                                              "Small (1 < X <= 5)", 
+                                                              "Single (0 < X <= 1)",
+                                                              "No TCR"))
+
+current.clone.names <- c("Hyperexpanded (100 < X <= 500)", "Large (20 < X <= 100)", "Medium (5 < X <= 20)", "Small (1 < X <= 5)", "Single (0 < X <= 1)", "No TCR")
+new.clone.names <- c("Hyperexpanded (100 < X)", "Large (20 < X <= 100)", "Medium (5 < X <= 20)", "Small (1 < X <= 5)", "Single (0 < X <= 1)", "No TCR information")
+clust_30PC_res03_seurat@active.ident <- plyr::mapvalues(x = clust_30PC_res03_seurat@active.ident, from = current.clone.names, to = new.clone.names)
+clust_30PC_res03_seurat$cloneType <- clust_30PC_res03_seurat@active.ident
+
+slot(clust_30PC_res03_seurat, "meta.data")$cloneType <- factor(slot(clust_30PC_res03_seurat, "meta.data")$cloneType, 
+                                                   levels = c("Hyperexpanded (100 < X)", 
+                                                              "Large (20 < X <= 100)", 
+                                                              "Medium (5 < X <= 20)", 
+                                                              "Small (1 < X <= 5)", 
+                                                              "Single (0 < X <= 1)", 
+                                                              "No TCR information"))
+
+clust_30PC_res03_seurat$clonal <- ifelse(clust_30PC_res03_seurat$Frequency > 1, "Yes", "No")
+
+totalcellcount_add <- clust_30PC_res03_seurat@meta.data %>% group_by(sampleTissue_Pub) %>% add_tally(name = "sample_cellcount")
+clust_30PC_res03_seurat$totalcellCount <- totalcellcount_add$sample_cellcount
+
+
+Idents(clust_30PC_res03_seurat) <- clust_30PC_res03_seurat$broadident
+
+clust_30PC_res03_seurat$broadident <- factor(clust_30PC_res03_seurat$broadident, levels = c("T cells", "B cells", "Proliferating",  "Fibroblasts", "Monocytes"))
+TBbroadclustercolors <- TBclustercolors[c(4,13,9,16,17)]
+
+
+# Combined T and B plotting -----------------------------------------------------
+DimPlot(clust_30PC_res03_seurat, group.by = "broadident", cols = TBbroadclustercolors) + 
+  ggtitle(NULL) + xlab("UMAP 1") + ylab("UMAP 2")
+ggsave("UMAP_TB_broadclusters.eps", width = 6, height = 4)
+
+DimPlot(clust_30PC_res03_seurat, group.by = "tissue_source", shuffle = T) +
+  scale_color_manual(values = c("#f2a21e", "#88a0c4"), name = NULL, labels = c("SYN", "PBL")) +
+  ggtitle(NULL) + xlab("UMAP 1") + ylab("UMAP 2") + 
+  theme(legend.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank())
+ggsave("UMAP_TB_byTissue.eps", width = 4, height = 3.5)
+
+DimPlot(clust_30PC_res03_seurat, group.by = "tissue_source", shuffle = T, split.by = "tissue_source", ncol = 1, pt.size = 0.1) +
+  scale_color_manual(values = c("#f2a21e", "#88a0c4"), name = NULL, labels = c("SYN", "PBL")) +
+  ggtitle(NULL) + xlab("UMAP 1") + ylab("UMAP 2") & 
+  theme(legend.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+ggsave("UMAP_TB_byTissue_split.eps", width = 4, height = 6)
+
+Idents(clust_30PC_res03_seurat) <- clust_30PC_res03_seurat$tissue_source
+DimPlot(clust_30PC_res03_seurat, cells.highlight = WhichCells(clust_30PC_res03_seurat, idents = "SYN"), 
+        cols.highlight = c("#f2a21e"), sizes.highlight = 0.1, cols = "gray80") +
+  ggtitle("SYN") + xlab("UMAP 1") + ylab("UMAP 2") + 
+  theme(legend.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5, size = 11))
+ggsave("UMAP_TB_SYN_highlight.eps", width = 3.5, height = 3)
+
+DimPlot(clust_30PC_res03_seurat, cells.highlight = WhichCells(clust_30PC_res03_seurat, idents = "PBL"), 
+        cols.highlight = c("#88a0c4"), sizes.highlight = 0.1, cols = "gray80") +
+  ggtitle("PBL") + xlab("UMAP 1") + ylab("UMAP 2") + 
+  theme(legend.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5, size = 11))
+ggsave("UMAP_TB_PBL_highlight.eps", width = 3.5, height = 3)
+
+clust_30PC_res03_seurat$tissue_cluster <- paste0(clust_30PC_res03_seurat$tissue_source, "_", clust_30PC_res03_seurat$broadident)
+Idents(clust_30PC_res03_seurat) <- clust_30PC_res03_seurat$tissue_cluster
+
+DimPlot(clust_30PC_res03_seurat, cells.highlight = list(WhichCells(clust_30PC_res03_seurat, idents = "SYN_T cells"), 
+                                         WhichCells(clust_30PC_res03_seurat, idents = "SYN_B cells"), 
+                                         WhichCells(clust_30PC_res03_seurat, idents = "SYN_Proliferating"), 
+                                         WhichCells(clust_30PC_res03_seurat, idents = "SYN_Fibroblasts"), 
+                                         WhichCells(clust_30PC_res03_seurat, idents = "SYN_Monocytes")), 
+        cols.highlight = rev(TBbroadclustercolors), sizes.highlight = 0.05, cols = "gray80") +
+  scale_color_manual(breaks = c("Group_1", "Group_2", "Group_3", "Group_4", "Group_5", "Unselected"), 
+                     labels = c("SYN_T cells", "SYN_B cells", "SYN_Proliferating", "SYN_Fibroblasts", "SYN_Monocytes", "Unselected"), 
+                     values = c(TBbroadclustercolors, "gray90")) +
+  ggtitle("SYN") + xlab("UMAP 1") + ylab("UMAP 2") + 
+  theme(legend.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5, size = 11))
+ggsave("UMAP_TB_SYN_highlight_clusters.eps", width = 3.5, height = 3)
+
+DimPlot(clust_30PC_res03_seurat, cells.highlight = list(WhichCells(clust_30PC_res03_seurat, idents = "PBL_T cells"), 
+                                                        WhichCells(clust_30PC_res03_seurat, idents = "PBL_B cells"), 
+                                                        WhichCells(clust_30PC_res03_seurat, idents = "PBL_Proliferating"), 
+                                                        WhichCells(clust_30PC_res03_seurat, idents = "PBL_Monocytes")), 
+        cols.highlight = rev(TBbroadclustercolors), sizes.highlight = 0.05, cols = "gray80") +
+  scale_color_manual(breaks = c("Group_1", "Group_2", "Group_3", "Group_4", "Unselected"), 
+                     labels = c("PBL_T cells", "PBL_B cells", "PBL_Proliferating", "PBL_Monocytes", "Unselected"), 
+                     values = c(TBbroadclustercolors[c(1:3,5)], "gray90")) +
+  ggtitle("PBL") + xlab("UMAP 1") + ylab("UMAP 2") + 
+  theme(legend.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5, size = 11))
+ggsave("UMAP_TB_PBL_highlight_clusters.eps", width = 3.5, height = 3)
+Idents(clust_30PC_res03_seurat) <- clust_30PC_res03_seurat$broadident
+
+DimPlot(clust_30PC_res03_seurat, group.by = "sample_ID_Pub", shuffle = T) + 
+  ggtitle(NULL) + xlab("UMAP 1") + ylab("UMAP 2") +
+  theme(legend.text = element_text(size = 8))
+ggsave("UMAP_TB_bySampleID.eps", width = 6, height = 4)
+
+DimPlot(clust_30PC_res03_seurat, group.by = "sample_ID_Pub", split.by = "sample_ID_Pub", ncol = 4) + 
+  ggtitle(NULL) + xlab("UMAP 1") + ylab("UMAP 2") +
+  theme(legend.position = "none")
+ggsave("UMAP_TB_bySampleID_split.eps", width = 8, height = 6)
+
+DimPlot(clust_30PC_res03_seurat, group.by = "sampleTissue_Pub", shuffle = T) + 
+  ggtitle(NULL) + xlab("UMAP 1") + ylab("UMAP 2") +
+  theme(legend.text = element_text(size = 8))
+ggsave("UMAP_TB_bySampleTissue.eps", width = 7, height = 4)
+
+DimPlot(clust_30PC_res03_seurat, group.by = "sampleTissue_Pub", split.by = "sampleTissue_Pub", ncol = 4, cols = c(rep(c("#f2a21e", "#88a0c4"), 7), rep("#f2a21e", 2), rep(c("#f2a21e", "#88a0c4"), 3))) + 
+  ggtitle(NULL) + xlab("UMAP 1") + ylab("UMAP 2") +
+  theme(legend.position = "none")
+ggsave("UMAP_TB_bySampleTissue_split.eps", width = 8, height = 12)
+
+#distribution by sample ID
+clust_30PC_res03_seurat@meta.data %>%
+  group_by(sample_ID_Pub, broadident) %>%
+  dplyr::count() %>%
+  group_by(sample_ID_Pub) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=sample_ID_Pub,y=Percent, fill=broadident)) +
+  geom_col() +
+  scale_fill_manual(values = TBbroadclustercolors, name = "Cell Type") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  labs(fill = "Donor") +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10)) 
+ggsave("barplot_TB_broadclusters_bydonor_percent.eps", width = 6, height = 2)
+
+clust_30PC_res03_seurat@meta.data %>%
+  group_by(sample_ID_Pub, broadident) %>%
+  dplyr::count() %>%
+  group_by(sample_ID_Pub) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=sample_ID_Pub,y=n, fill=broadident)) +
+  geom_col() +
+  scale_fill_manual(values = TBbroadclustercolors, name = "Cell Type") +
+  ggtitle(NULL) +
+  ylab("Number of Cells") +
+  xlab(NULL) + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10)) 
+ggsave("barplot_TB_broadclusters_bydonor_number.eps", width = 6, height = 2)
+
+
+#distribution by sample ID and tissue
+clust_30PC_res03_seurat@meta.data %>%
+  group_by(sampleTissue_Pub, broadident) %>%
+  dplyr::count() %>%
+  group_by(sampleTissue_Pub) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=sampleTissue_Pub,y=Percent, fill=broadident)) +
+  geom_col() +
+  scale_fill_manual(values = TBbroadclustercolors, name = "Cell Type") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  labs(fill = "Sample") +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10)) 
+ggsave("barplot_TB_broadclusters_bysample_percent.eps", width = 7, height = 2)
+
+clust_30PC_res03_seurat@meta.data %>%
+  group_by(sampleTissue_Pub, broadident) %>%
+  dplyr::count() %>%
+  group_by(sampleTissue_Pub) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=sampleTissue_Pub,y=n, fill=broadident)) +
+  geom_col() +
+  scale_fill_manual(values = TBbroadclustercolors, name = "Cell Type") +
+  ggtitle(NULL) +
+  ylab("Number of Cells") +
+  xlab(NULL) + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10)) 
+ggsave("barplot_TB_broadclusters_bysample_number.eps", width = 7, height = 2)
+
+
+#by tissue source
+clust_30PC_res03_seurat@meta.data %>%
+  group_by(tissue_source, broadident) %>%
+  dplyr::count() %>%
+  group_by(broadident) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=broadident,y=Percent, fill=tissue_source)) +
+  geom_col() +
+  scale_fill_manual(values = c("#f2a21e", "#88a0c4"), name = "Source", labels = c("SYN", "PBL")) +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  ylab(NULL) +
+  xlab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 11)) 
+ggsave("barplot_TB_broadclusters_bytissue_percent.eps", width = 3, height = 2)
+
+clust_30PC_res03_seurat@meta.data %>%
+  group_by(broadident, tissue_source) %>%
+  dplyr::count() %>%
+  group_by(tissue_source) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=tissue_source,y=Percent, fill=broadident)) +
+  geom_col() +
+  scale_fill_manual(values = TBbroadclustercolors, name = "Cell Type") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  ylab(NULL) +
+  xlab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10)) 
+ggsave("barplot_TB_tissue_byBroadCluster_percent.eps", width = 2.5, height = 5)
+
+
+#identifying and plotting broad lineage markers
+Idents(clust_30PC_res03_seurat) <- clust_30PC_res03_seurat$broadident
+TBbroad_markers <- FindAllMarkers(object=clust_30PC_res03_seurat, only.pos = TRUE, logfc.threshold = 0.50, min.pct = 0.50)
+
+StackedVlnPlot(clust_30PC_res03_seurat, features = c("CD3E", "IL7R", "CD79A", "IGKC", "MKI67", "TYMS", "PRG4", "FN1", "S100A8", "LYZ"), cols = TBbroadclustercolors)
+ggsave("stackedviolin_TB_broadclusters.eps", width = 4, height = 4)
+
+StackedVlnPlot(clust_30PC_res03_seurat, features = c("PTPRC", "CD3E", "IL7R", "CD4", "CD8A", "CD79A", "CD19", "MS4A1", "IGKC", "MKI67", "TYMS", "PRG4", "FN1", "S100A8", "LYZ"), cols = TBbroadclustercolors)
+ggsave("stackedviolin_TB_broadclusters_expandedmarkers.eps", width = 4, height = 6)
+
+DotPlot(clust_30PC_res03_seurat, features = rev(c("CD3E", "IL7R", "CD79A", "MS4A1", "MKI67", "TYMS", "PRG4", "FN1", "S100A8", "LYZ")), assay = "SCT") + 
+  coord_flip() + 
+  RotatedAxis() + 
+  xlab(NULL) + ylab(NULL) + 
+  scale_color_distiller(palette = "Blues", direction = 1) + 
+  theme(legend.title = element_text(size = 11),
+        legend.text = element_text(size = 9))
+ggsave("dotplot_TB_keymarkers.eps", width = 4.5, height = 4)
+
+DotPlot(clust_30PC_res03_seurat, features = rev(c("PTPRC", "CD3E", "IL7R", "CD4", "CD8A", "CD79A", "CD19", "MS4A1", "IGKC", "MKI67", "TYMS", "PRG4", "FN1", "S100A8", "LYZ")), assay = "SCT") + 
+  coord_flip() + 
+  RotatedAxis() + 
+  xlab(NULL) + ylab(NULL) + 
+  scale_color_distiller(palette = "Blues", direction = 1) + 
+  theme(legend.title = element_text(size = 11),
+        legend.text = element_text(size = 9))
+ggsave("dotplot_TB_keymarkers_expandedmarkers.eps", width = 4.5, height = 6)
+
+FeaturePlot(clust_30PC_res03_seurat, features = c("CD3E", "IL7R", "CD79A", "IGKC", "MKI67", "TYMS", "PRG4", "FN1", "S100A8", "LYZ"), ncol = 2) &
+  scale_color_distiller(palette = "Reds", direction = 1) & 
+  theme(plot.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+ggsave("UMAP_TB_keymarkers.png", width = 2.8, height = 6)
+
+FeaturePlot(clust_30PC_res03_seurat, features = c("PTPRC", "CD3E", "IL7R", "CD4", "CD8A", "CD79A", "CD19", "MS4A1", "IGKC", "MKI67", "TYMS", "PRG4", "FN1", "S100A8", "LYZ"), ncol = 3) &
+  scale_color_distiller(palette = "Reds", direction = 1) & 
+  theme(plot.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+ggsave("UMAP_TB_keymarkers_expandedmarkers.png", width = 4, height = 6)
+
+FeaturePlot(clust_30PC_res03_seurat, features = paste0("cite_", rownames(clust_30PC_res03_seurat@assays$cite@counts)), ncol = 3, max.cutoff = "q95") &
+  scale_color_distiller(palette = "Purples", direction = 1) & 
+  theme(plot.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none")
+ggsave("UMAP_TB_keymarkers_protein.png", width = 4, height = 2.5)
+
+#broad VDJ information
+clust_30PC_res03_seurat$has_vdj <- factor(clust_30PC_res03_seurat$has_vdj, levels = c("Paired chain", "Single chain", "No"))
+
+Idents(clust_30PC_res03_seurat) <- clust_30PC_res03_seurat$has_vdj
+current.cluster.ids <- levels(clust_30PC_res03_seurat$has_vdj)
+new.cluster.ids <- c("Yes", "Yes", "No")
+clust_30PC_res03_seurat@active.ident <- plyr::mapvalues(x = clust_30PC_res03_seurat@active.ident, from = current.cluster.ids, to = new.cluster.ids)
+clust_30PC_res03_seurat$has_vdj_tf <- clust_30PC_res03_seurat@active.ident
+
+clust_30PC_res03_seurat$has_vdj_tf <- factor(clust_30PC_res03_seurat$has_vdj_tf, levels = c("Yes", "No"))
+
+Idents(clust_30PC_res03_seurat) <- clust_30PC_res03_seurat$broadident
+clust_30PC_res03_seurat_TBprolif <- subset(clust_30PC_res03_seurat, idents = c("T cells", "B cells", "Proliferating"))
+
+DimPlot(clust_30PC_res03_seurat, group.by = "has_vdj_tf") +
+  scale_color_manual(values = TBclustercolors[c(7,3)], name = NULL, labels = c("VDJ", "No VDJ")) +
+  ggtitle(NULL) + xlab("UMAP 1") + ylab("UMAP 2") + 
+  theme(legend.title = element_text(size = 10),
+        panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        panel.background = element_blank())
+ggsave("UMAP_TB_byVDJpresent.eps", width = 5, height = 3.5)
+
+clust_30PC_res03_seurat@meta.data %>%
+  group_by(sampleTissue_Pub, has_vdj_tf) %>%
+  dplyr::count() %>%
+  group_by(sampleTissue_Pub) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=sampleTissue_Pub,y=Percent, fill=has_vdj_tf)) +
+  geom_col() +
+  scale_fill_manual(values = TBclustercolors[c(7,3)], name = "Has VDJ") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  labs(fill = "Sample") +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10)) 
+ggsave("barplot_TB_hasVDJ_bysample_percent.eps", width = 7, height = 2)
+
+#to plot cell num, pop distribution, and VDJ with same dimensions
+p1 <- clust_30PC_res03_seurat@meta.data %>%
+  group_by(sampleTissue_Pub, broadident) %>%
+  dplyr::count() %>%
+  group_by(sampleTissue_Pub) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=sampleTissue_Pub,y=Percent, fill=broadident)) +
+  geom_col() +
+  scale_fill_manual(values = TBbroadclustercolors, name = "Cell Type") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  labs(fill = "Sample") +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10)) 
+
+p2 <- clust_30PC_res03_seurat_TBprolif@meta.data %>%
+  group_by(sampleTissue_Pub, has_vdj_tf) %>%
+  dplyr::count() %>%
+  group_by(sampleTissue_Pub) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=sampleTissue_Pub,y=Percent, fill=has_vdj_tf)) +
+  geom_col() +
+  scale_fill_manual(values = TBclustercolors[c(7,1)], name = "Has VDJ") +
+  scale_y_continuous(labels = function(x) paste0(x, "%")) +
+  ggtitle(NULL) +
+  labs(fill = "Sample") +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10)) 
+
+p3 <- clust_30PC_res03_seurat@meta.data %>%
+  group_by(sampleTissue_Pub, sort_group) %>%
+  dplyr::count() 
+
+p3$tissue_source <- str_sub(p3$sampleTissue_Pub, - 3, - 1)   
+
+p3$tissue_source <- factor(p3$tissue_source, levels = c("SYN", "PBL"))
+
+p3 <- p3 %>% group_by(sampleTissue_Pub) %>%
+  mutate(Percent=100*n/sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x=sampleTissue_Pub,y=n, fill = tissue_source)) +
+  geom_col() +
+  scale_fill_manual(values = c("#f2a21e", "#88a0c4"), name = "Source", labels = c("SYN", "PBL")) +
+  ggtitle(NULL) +
+  labs(fill = "Sample") +
+  xlab(NULL) + ylab(NULL) +
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+        legend.text = element_text(size=9),
+        legend.title = element_text(size = 10)) 
+
+both3 <- align_plots(p1, p2, p3, align="hv", axis="tblr")
+p1x <- ggdraw(both3[[1]])
+p2x <- ggdraw(both3[[2]])
+p3x <- ggdraw(both3[[3]])
+
+save_plot("barplot_TB_broadclusters_bysample_percent_aligned.eps", p1x, base_width = 7, base_height = 2)
+save_plot("barplot_TB_hasVDJ_bysample_percent_aligned.eps", p2x, base_width = 7, base_height = 2)
+save_plot("barplot_TB_numcells_aligned.eps", p3x, base_width = 7, base_height = 2)
+
+
+#patient group specific broad cluster analysis
+clust_30PC_res03_seurat@meta.data %>%
+  group_by(sampleTissue_Pub, broadident) %>%
+  add_tally() %>% distinct(sampleTissue_Pub, sample_ID_Pub, broadident, .keep_all = TRUE) %>%
+  filter(broadident == "T cells") %>% 
+  ggplot(aes(x = CTAP, y = n, color = tissue_source)) +
+  geom_point()
+
+saveRDS(clust_30PC_res03_seurat, file = "combined_BandT_object.RDS")
+
+# Subsetting T cells -----------------------------------------------------
+
+DefaultAssay(clust_30PC_res03_seurat) <- "RNA"
+clust_30PC_res03_seurat_Tcells <- subset(clust_30PC_res03_seurat, idents = c("T cells", "Proliferating"))
+
+clust_30PC_res03_seurat_Tcells <- NormalizeData(clust_30PC_res03_seurat_Tcells, normalization.method = "LogNormalize", scale.factor = 10000)
+clust_30PC_res03_seurat_Tcells <- FindVariableFeatures(clust_30PC_res03_seurat_Tcells, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(clust_30PC_res03_seurat_Tcells), 10)
+
+all.genes <- rownames(clust_30PC_res03_seurat_Tcells)
+clust_30PC_res03_seurat_Tcells <- ScaleData(clust_30PC_res03_seurat_Tcells, vars.to.regress = c("subsets_Mito_percent"))
+clust_30PC_res03_seurat_Tcells <- RunPCA(clust_30PC_res03_seurat_Tcells, features = VariableFeatures(object = clust_30PC_res03_seurat_Tcells))
+
+dims_use = 1:50
+clust_30PC_res03_seurat_Tcells <- RunHarmony(clust_30PC_res03_seurat_Tcells, group.by.vars=c("sample_ID_Pub", "tissue_source"))
+clust_30PC_res03_seurat_Tcells <- RunUMAP(object=clust_30PC_res03_seurat_Tcells, reduction="harmony", dims=dims_use, verbose=FALSE)
+clust_30PC_res03_seurat_Tcells <- FindNeighbors(object=clust_30PC_res03_seurat_Tcells, reduction="harmony", dims=dims_use, verbose=FALSE)
+clust_30PC_res03_seurat_Tcells <- FindClusters(object=clust_30PC_res03_seurat_Tcells, resolution=1.4, verbose=FALSE)
+
+DimPlot(clust_30PC_res03_seurat_Tcells, label = T, repel = T)
+
+Tcell_markers <- FindAllMarkers(object=clust_30PC_res03_seurat_Tcells, only.pos = FALSE, logfc.threshold = 0.50, min.pct = 0.40)
+write.csv(Tcell_markers, "tcellclustermarkers_res1.4.csv")
+
+tcellcount_add <- clust_30PC_res03_seurat_Tcells@meta.data %>% group_by(sampleTissue_Pub) %>% add_tally(name = "sample_tcellcount")
+clust_30PC_res03_seurat_Tcells$tcellCount <- tcellcount_add$sample_tcellcount
+
+clust_30PC_res03_seurat_Tcells$allTcellclusteringID <- clust_30PC_res03_seurat_Tcells$seurat_clusters
+
+rm(clust_30PC_res03_seurat)
+
+# Initial subsetting CD8 T cells -----------------------------------------------------
+Idents(clust_30PC_res03_seurat_Tcells) <- clust_30PC_res03_seurat_Tcells$seurat_clusters
+initialCD8 <- subset(clust_30PC_res03_seurat_Tcells, idents = c(3,6,8,10,20,21,27,28))
+
+
+initialCD8 <- NormalizeData(initialCD8, normalization.method = "LogNormalize", scale.factor = 10000)
+initialCD8 <- FindVariableFeatures(initialCD8, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(initialCD8), 10)
+
+all.genes <- rownames(initialCD8)
+initialCD8 <- ScaleData(initialCD8, vars.to.regress = c("subsets_Mito_percent"), features = all.genes)
+initialCD8 <- RunPCA(initialCD8, features = VariableFeatures(object = initialCD8))
+
+dims_use = 1:40
+initialCD8 <- RunHarmony(initialCD8, group.by.vars=c("sample_ID_Pub", "tissue_source"))
+initialCD8 <- RunUMAP(object=initialCD8, reduction="harmony", dims=dims_use, verbose=FALSE)
+initialCD8 <- FindNeighbors(object=initialCD8, reduction="harmony", dims=dims_use, verbose=FALSE)
+initialCD8 <- FindClusters(object=initialCD8, resolution=1, verbose=FALSE)
+
+cd8cols <- c(colorRampPalette(brewer.pal(8, "Set2"))(13)[1:4], colorRampPalette(brewer.pal(8, "Set1"))(13)[1:5], colorRampPalette(brewer.pal(8, "Set3"))(13)[1:5])
+DimPlot(initialCD8) + 
+  scale_color_manual(values = cd8cols)
+
+initialCD8Tcell_markers <- FindAllMarkers(object=initialCD8, only.pos = TRUE, logfc.threshold = 0.50, min.pct = 0.40)
+write.csv(initialCD8Tcell_markers, "initialcd8tcellclustermarkers_res1.0.csv")
+
+DotPlot(initialCD8, features = c("CD3E", "CD8B", "CD4", "TRDV1", "TRDV2", "IGKC"))
+  
+CD8cells_fromCD8 <- WhichCells(initialCD8, idents = c(0,1,2,3,4,5,6,7,8,10,12))
+CD4cells_fromCD8 <- WhichCells(initialCD8, idents = c(9))
+
+# Initial subsetting CD4 T cells -----------------------------------------------------
+Idents(clust_30PC_res03_seurat_Tcells) <- clust_30PC_res03_seurat_Tcells$seurat_clusters
+initialCD4 <- subset(clust_30PC_res03_seurat_Tcells, idents = c(0,1,2,4,5,7,9,11,12,13,14,15,22,25,26))
+
+
+initialCD4 <- NormalizeData(initialCD4, normalization.method = "LogNormalize", scale.factor = 10000)
+initialCD4 <- FindVariableFeatures(initialCD4, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(initialCD4), 10)
+
+all.genes <- rownames(initialCD4)
+initialCD4 <- ScaleData(initialCD4, vars.to.regress = c("subsets_Mito_percent"), features = all.genes)
+initialCD4 <- RunPCA(initialCD4, features = VariableFeatures(object = initialCD4))
+
+dims_use = 1:40
+initialCD4 <- RunHarmony(initialCD4, group.by.vars=c("sample_ID_Pub", "tissue_source"))
+initialCD4 <- RunUMAP(object=initialCD4, reduction="harmony", dims=dims_use, verbose=FALSE)
+initialCD4 <- FindNeighbors(object=initialCD4, reduction="harmony", dims=dims_use, verbose=FALSE)
+initialCD4 <- FindClusters(object=initialCD4, resolution=1.1, verbose=FALSE)
+
+DimPlot(initialCD4)
+
+initialCD4Tcell_markers <- FindAllMarkers(object=initialCD4, only.pos = TRUE, logfc.threshold = 0.50, min.pct = 0.40)
+write.csv(initialCD4Tcell_markers, "initialcd4tcellclustermarkers_res1.1.csv")
+
+DotPlot(initialCD4, features = c("CD3E", "CD8B", "CD4", "TRDV1", "TRDV2", "IGKC"))
+
+CD4cells_fromCD4 <- WhichCells(initialCD4, idents = c(0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,16,17))
+CD8cells_fromCD4 <- WhichCells(initialCD4, idents = c(15))
+
+# Initial subsetting innate T cells -----------------------------------------------------
+Idents(clust_30PC_res03_seurat_Tcells) <- clust_30PC_res03_seurat_Tcells$seurat_clusters
+initialinnate <- subset(clust_30PC_res03_seurat_Tcells, idents = c(16,17,19,23))
+
+
+initialinnate <- NormalizeData(initialinnate, normalization.method = "LogNormalize", scale.factor = 10000)
+initialinnate <- FindVariableFeatures(initialinnate, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(initialinnate), 10)
+
+all.genes <- rownames(initialinnate)
+initialinnate <- ScaleData(initialinnate, vars.to.regress = c("subsets_Mito_percent"), features = all.genes)
+initialinnate <- RunPCA(initialinnate, features = VariableFeatures(object = initialinnate))
+
+dims_use = 1:30
+initialinnate <- RunHarmony(initialinnate, group.by.vars=c("sample_ID_Pub", "tissue_source"))
+initialinnate <- RunUMAP(object=initialinnate, reduction="harmony", dims=dims_use, verbose=FALSE)
+initialinnate <- FindNeighbors(object=initialinnate, reduction="harmony", dims=dims_use, verbose=FALSE)
+initialinnate <- FindClusters(object=initialinnate, resolution=0.4, verbose=FALSE)
+
+DimPlot(initialinnate)
+
+initialinnateTcell_markers <- FindAllMarkers(object=initialinnate, only.pos = TRUE, logfc.threshold = 0.50, min.pct = 0.40)
+write.csv(initialinnateTcell_markers, "initialinnatetcellclustermarkers_res0.4.csv")
+
+DotPlot(initialinnate, features = c("CD3E", "CD8B", "CD4", "TRDV1", "TRDV2", "IGKC", "TRAV1-2"))
+
+innatecells_frominnate <- WhichCells(initialinnate, idents = c(0,1,2,3,4,5))
+CD4cells_frominnate <- WhichCells(initialinnate, idents = c(6))
+
+# Initial subsetting proliferating cells -----------------------------------------------------
+Idents(clust_30PC_res03_seurat_Tcells) <- clust_30PC_res03_seurat_Tcells$seurat_clusters
+initialprolif <- subset(clust_30PC_res03_seurat_Tcells, idents = c(18))
+
+
+initialprolif <- NormalizeData(initialprolif, normalization.method = "LogNormalize", scale.factor = 10000)
+initialprolif <- FindVariableFeatures(initialprolif, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(initialprolif), 10)
+
+all.genes <- rownames(initialprolif)
+initialprolif <- ScaleData(initialprolif, vars.to.regress = c("subsets_Mito_percent"), features = all.genes)
+initialprolif <- RunPCA(initialprolif, features = VariableFeatures(object = initialprolif))
+
+dims_use = 1:40
+initialprolif <- RunHarmony(initialprolif, group.by.vars=c("sample_ID_Pub", "tissue_source"))
+initialprolif <- RunUMAP(object=initialprolif, reduction="harmony", dims=dims_use, verbose=FALSE)
+initialprolif <- FindNeighbors(object=initialprolif, reduction="harmony", dims=dims_use, verbose=FALSE)
+initialprolif <- FindClusters(object=initialprolif, resolution=0.4, verbose=FALSE)
+
+DimPlot(initialprolif)
+
+initialprolifTcell_markers <- FindAllMarkers(object=initialprolif, only.pos = TRUE, logfc.threshold = 0.50, min.pct = 0.40)
+write.csv(initialprolifTcell_markers, "initialproliftcellclustermarkers_res0.4.csv")
+
+DotPlot(initialprolif, features = c("CD3E", "CD8B", "CD4", "TRDV1", "TRDV2", "IGKC"))
+
+CD8cells_fromprolif <- WhichCells(initialprolif, idents = c(1,2))
+CD4cells_fromprolif <- WhichCells(initialprolif, idents = c(0))
+innatecells_fromprolif <- WhichCells(initialprolif, idents = c(4))
+
+#save.image("~/Downloads/20220319_AMP_initialclusterings.RData")
