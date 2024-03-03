@@ -19,7 +19,7 @@ library(UpSetR)
 source("/Users/gdunlap/Desktop/Rao_Lab/AMP_Phase_2/manuscript/AMP_manuscript_functions.R")
 
 
-setwd("/Users/gdunlap/Desktop/Rao_Lab/AMP_Phase_2/manuscript/analysis/")
+setwd("/Rao_Lab/AMP_Phase_2/manuscript/analysis/")
 
 # Pre single-cell analysis -----------------------------------------------------
 
