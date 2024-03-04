@@ -1,0 +1,288 @@
+---
+title: "Hierarchical clustering method"
+author: "Ruoqiao"
+output:
+  html_document:
+    code_folding: hide
+    toc: yes
+    toc_float: yes
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+library(ggsci)
+library(ggplot2)
+library(ggtree)
+library(tibble)
+library(tidyr)
+library(dplyr)
+library(ggdendro)
+knitr::opts_chunk$set(echo = TRUE)
+
+# Define the category names
+ident <- c("B-Naïve(IgD_high)", "B-Naïve(IgD_low)", "B-Naïve(HSPA1B+)", "B-Mito_high", "B-Activated", "B-ABC", "B-Memory", "B-Clonal(LILRA4+)", "Plasmacells", "Plasmablasts", "BT-doublets")
+# Define the corresponding colors
+colors <- c("#A6CEE3", "#5399C6", "#3E9F32", "#99CD91", "#FDB762", "#CAC848", "#F47676", "#5C0905", "#CCAFCA", "#825D99","grey") 
+# Create a named vector
+category_colors <- setNames(colors, ident)
+```
+
+```{r}
+# Set the directory from
+file_list.meta <-  list.files("./refined/", pattern = "\\_clone.csv$")
+
+# i=1, clone 11808
+i=1
+df <- read.csv(paste("./refined/",file_list.meta[i],sep = ""))
+group_anno_a <- data.frame(
+                         v_score=df$v_score, 
+                         v_identity=df$v_identity, 
+                         j_score=df$j_score,
+                         j_identity=df$j_identity,
+                         vshm=df$vshm,
+                         jshm=df$jshm,
+                         vj_shm_rate=df$vj_shm_rate)
+group_anno_a[dim(group_anno_a)[1],] <- c(2000,1,300,1,0,0,0)
+group_anno_a <- as.data.frame(apply(group_anno_a, 2, as.numeric))
+group_anno_a$unique.name = df$unique.name
+  
+group_anno <- data.frame(unique.name=df$unique.name,
+                         ident=df$ident, 
+                         v_gene=df$v_gene,
+                         j_gene=df$j_gene,
+                         d_gene=df$d_gene, 
+                         c_gene=df$c_gene,
+                         clonotype=df$raw_clonotype_id,
+                         vj_shm_rate=df$vj_shm_rate)
+group_anno[dim(group_anno)[1],dim(group_anno)[2]] <- 0
+
+metadata <- group_anno
+numeric_data <- group_anno_a
+
+# normalize data to values from 0 to 1 
+numeric_data_norm <- numeric_data %>%
+  select(unique.name, everything()) %>%
+  pivot_longer(cols = 2:ncol(.), values_to = "value", names_to = "type") %>%
+  group_by(type) %>%
+  mutate(value_norm = (value-min(value))/(max(value)-min(value))) %>% # normalize data to values 0–1
+  select(unique.name, value_norm) %>%
+  pivot_wider(names_from = "type", values_from = "value_norm") %>%
+  column_to_rownames("unique.name")
+
+# create dendrogram from distance matrix of normalized data
+dist_matrix <- dist(numeric_data_norm, method = "euclidean")
+dendrogram <- as.dendrogram(hclust(dist_matrix, method = "ward.D"))
+#plot(dendrogram)
+
+
+# extract dendrogram segment data
+dendrogram_data <- dendro_data(dendrogram)
+dendrogram_segments <- dendrogram_data$segments # contains all dendrogram segment data
+head(dendrogram_segments)
+
+# get terminal dendrogram segments
+dendrogram_ends <- dendrogram_segments %>%
+  filter(yend == 0) %>% # filter for terminal dendrogram ends
+  left_join(dendrogram_data$labels, by = "x") %>% # .$labels contains the row names from dist_matrix (i.e., sample_name)
+  rename(unique.name = label) %>%
+  left_join(metadata, by = "unique.name") 
+# dataframe now contains only terminal dendrogram segments and merged metadata associated with each iris
+
+head(dendrogram_ends)
+
+
+p <- ggplot() +
+  geom_segment(data = dendrogram_segments, 
+               aes(x=x, y=y, xend=xend, yend=yend)) +
+  geom_point(data = dendrogram_ends,
+               aes(x=xend, y=yend, xend=xend, yend=yend, color = ident, size=vj_shm_rate))+
+  geom_text(data = dendrogram_ends,
+            aes(x = xend, y = yend, label = c_gene), nudge_x =0, nudge_y= 0.2, hjust = 0, vjust =0.5, size = 5) +
+  geom_text(data = dendrogram_ends,
+            aes(x = xend, y = yend, label = v_gene), nudge_x =0, nudge_y= 1.2, hjust = 0, vjust =0.5, size = 5) +
+  geom_text(data = dendrogram_ends,
+            aes(x = xend, y = yend, label = j_gene), nudge_x =0, nudge_y= 2.5, hjust = 0, vjust =0.5, size = 5) +
+  scale_color_manual(values=category_colors) + scale_y_reverse() +
+  coord_flip() + 
+  ylab("") + 
+  labs(color = "Cell type")+
+  theme_dendrogram() +
+  expand_limits(y = c(-3, 2))+
+  guides(color = guide_legend(order = 0),
+         size  = guide_legend(order = 1))+
+      theme(legend.title = element_text(size =15),
+          legend.text = element_text(size =10))
+p
+```
+
+```{r}
+# i=2, clone 3469
+i=2
+df <- read.csv(paste("./refined/",file_list.meta[i],sep = ""))
+group_anno_a <- data.frame(
+                         v_score=df$v_score, 
+                         v_identity=df$v_identity, 
+                         j_score=df$j_score,
+                         j_identity=df$j_identity,
+                         vshm=df$vshm,
+                         jshm=df$jshm,
+                         vj_shm_rate=df$vj_shm_rate)
+group_anno_a[dim(group_anno_a)[1],] <- c(2000,1,300,1,0,0,0)
+group_anno_a <- as.data.frame(apply(group_anno_a, 2, as.numeric))
+group_anno_a$unique.name = df$unique.name
+  
+group_anno <- data.frame(unique.name=df$unique.name,
+                         ident=df$ident, 
+                         v_gene=df$v_gene,
+                         j_gene=df$j_gene,
+                         d_gene=df$d_gene, 
+                         c_gene=df$c_gene,
+                         clonotype=df$raw_clonotype_id,
+                         vj_shm_rate=df$vj_shm_rate)
+group_anno[dim(group_anno)[1],dim(group_anno)[2]] <- 0
+
+metadata <- group_anno
+numeric_data <- group_anno_a
+
+# normalize data to values from 0 to 1 
+numeric_data_norm <- numeric_data %>%
+  select(unique.name, everything()) %>%
+  pivot_longer(cols = 2:ncol(.), values_to = "value", names_to = "type") %>%
+  group_by(type) %>%
+  mutate(value_norm = (value-min(value))/(max(value)-min(value))) %>% # normalize data to values 0–1
+  select(unique.name, value_norm) %>%
+  pivot_wider(names_from = "type", values_from = "value_norm") %>%
+  column_to_rownames("unique.name")
+# create dendrogram from distance matrix of normalized data
+dist_matrix <- dist(numeric_data_norm, method = "euclidean")
+dendrogram <- as.dendrogram(hclust(dist_matrix, method = "ward.D"))
+
+# i= 2, clone 3469 reorder dendrogram
+dendrogram <-reorder(dendrogram, c(3,4,5,6,7,1,2), agglo.FUN=mean)
+
+# extract dendrogram segment data
+dendrogram_data <- dendro_data(dendrogram)
+dendrogram_segments <- dendrogram_data$segments # contains all dendrogram segment data
+head(dendrogram_segments)
+
+# get terminal dendrogram segments
+dendrogram_ends <- dendrogram_segments %>%
+  filter(yend == 0) %>% # filter for terminal dendrogram ends
+  left_join(dendrogram_data$labels, by = "x") %>% # .$labels contains the row names from dist_matrix (i.e., sample_name)
+  rename(unique.name = label) %>%
+  left_join(metadata, by = "unique.name") 
+# dataframe now contains only terminal dendrogram segments and merged metadata associated with each iris
+head(dendrogram_ends)
+
+p <- ggplot() +
+  geom_segment(data = dendrogram_segments, 
+               aes(x=x, y=y, xend=xend, yend=yend)) +
+  geom_point(data = dendrogram_ends,
+               aes(x=xend, y=yend, xend=xend, yend=yend, color = ident, size=vj_shm_rate))+
+  geom_text(data = dendrogram_ends,
+            aes(x = xend, y = yend, label = c_gene), nudge_x =0, nudge_y= 0.2, hjust = 0, vjust =0.5, size = 5) +
+  geom_text(data = dendrogram_ends,
+            aes(x = xend, y = yend, label = v_gene), nudge_x =0, nudge_y= 1.2, hjust = 0, vjust =0.5, size = 5) +
+  geom_text(data = dendrogram_ends,
+            aes(x = xend, y = yend, label = j_gene), nudge_x =0, nudge_y= 2.5, hjust = 0, vjust =0.5, size = 5) +
+  scale_color_manual(values=category_colors) + scale_y_reverse() +
+  coord_flip() + 
+  ylab("") + 
+  labs(color = "Cell type")+
+  theme_dendrogram() +
+  expand_limits(y = c(-3, 2))+
+  guides(color = guide_legend(order = 0),
+         size  = guide_legend(order = 1))+
+      theme(legend.title = element_text(size =15),
+          legend.text = element_text(size =10))
+p
+```
+
+
+```{r}
+# i=3, clone 9921
+i=3
+df <- read.csv(paste("./refined/",file_list.meta[i],sep = ""))
+group_anno_a <- data.frame(
+                         v_score=df$v_score, 
+                         v_identity=df$v_identity, 
+                         j_score=df$j_score,
+                         j_identity=df$j_identity,
+                         vshm=df$vshm,
+                         jshm=df$jshm,
+                         vj_shm_rate=df$vj_shm_rate)
+group_anno_a[dim(group_anno_a)[1],] <- c(2000,1,300,1,0,0,0)
+group_anno_a <- as.data.frame(apply(group_anno_a, 2, as.numeric))
+group_anno_a$unique.name = df$unique.name
+  
+group_anno <- data.frame(unique.name=df$unique.name,
+                         ident=df$ident, 
+                         v_gene=df$v_gene,
+                         j_gene=df$j_gene,
+                         d_gene=df$d_gene, 
+                         c_gene=df$c_gene,
+                         clonotype=df$raw_clonotype_id,
+                         vj_shm_rate=df$vj_shm_rate)
+group_anno[dim(group_anno)[1],dim(group_anno)[2]] <- 0
+
+metadata <- group_anno
+numeric_data <- group_anno_a
+
+# normalize data to values from 0 to 1 
+numeric_data_norm <- numeric_data %>%
+  select(unique.name, everything()) %>%
+  pivot_longer(cols = 2:ncol(.), values_to = "value", names_to = "type") %>%
+  group_by(type) %>%
+  mutate(value_norm = (value-min(value))/(max(value)-min(value))) %>% # normalize data to values 0–1
+  select(unique.name, value_norm) %>%
+  pivot_wider(names_from = "type", values_from = "value_norm") %>%
+  column_to_rownames("unique.name")
+# create dendrogram from distance matrix of normalized data
+dist_matrix <- dist(numeric_data_norm, method = "euclidean")
+dendrogram <- as.dendrogram(hclust(dist_matrix, method = "ward.D"))
+
+# i= 3, clone 9921 reorder dendrogram
+dendrogram <- reorder(dendrogram, c(10:1), agglo.FUN=mean)
+
+# extract dendrogram segment data
+dendrogram_data <- dendro_data(dendrogram)
+dendrogram_segments <- dendrogram_data$segments # contains all dendrogram segment data
+head(dendrogram_segments)
+
+# get terminal dendrogram segments
+dendrogram_ends <- dendrogram_segments %>%
+  filter(yend == 0) %>% # filter for terminal dendrogram ends
+  left_join(dendrogram_data$labels, by = "x") %>% # .$labels contains the row names from dist_matrix (i.e., sample_name)
+  rename(unique.name = label) %>%
+  left_join(metadata, by = "unique.name") 
+# dataframe now contains only terminal dendrogram segments and merged metadata associated with each iris
+
+head(dendrogram_ends)
+
+
+p <- ggplot() +
+  geom_segment(data = dendrogram_segments, 
+               aes(x=x, y=y, xend=xend, yend=yend)) +
+  geom_point(data = dendrogram_ends,
+               aes(x=xend, y=yend, xend=xend, yend=yend, color = ident, size=vj_shm_rate))+
+  geom_text(data = dendrogram_ends,
+            aes(x = xend, y = yend, label = c_gene), nudge_x =0, nudge_y= 0.2, hjust = 0, vjust =0.5, size = 5) +
+  geom_text(data = dendrogram_ends,
+            aes(x = xend, y = yend, label = v_gene), nudge_x =0, nudge_y= 1.2, hjust = 0, vjust =0.5, size = 5) +
+  geom_text(data = dendrogram_ends,
+            aes(x = xend, y = yend, label = j_gene), nudge_x =0, nudge_y= 2.5, hjust = 0, vjust =0.5, size = 5) +
+  scale_color_manual(values=category_colors) + scale_y_reverse() +
+  coord_flip() + 
+  ylab("") + 
+  labs(color = "Cell type")+
+  theme_dendrogram() +
+  expand_limits(y = c(-3, 2))+
+  guides(color = guide_legend(order = 0),
+         size  = guide_legend(order = 1))+
+      theme(legend.title = element_text(size =15),
+          legend.text = element_text(size =10))
+p
+```
+
+
