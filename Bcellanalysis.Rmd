@@ -63,7 +63,7 @@ cols <- setNames(cols, ident)
 
 tissue <- c("Syn","PBL")
 # Define the corresponding colors
-tissue_cols <- c("#fcb34d", "#9cb3d1") 
+tissue_cols <- c("#E69F00", "#56B4E9") 
 tissue_cols <- setNames(tissue_cols, tissue)
 ```
 
@@ -129,6 +129,7 @@ plt
 readr::write_csv(df_meta_sub_group, sprintf("%s_number of cells included in each cluster for B cell.csv", params$output_root))
 ```
 
+
 ## Barplot of the number of cells included in each cluster
 ```{r entropy, dev = c('png', 'pdf'), fig.width = 8, fig.height=3.5}
 MASC_test = read.csv(params$MAST_test_csv,row.names = 1,header = T)
@@ -144,4 +145,21 @@ plt = ggplot(df_meta_sub_group, aes(x = cell_type, fill = tissue_source, y = val
 plt + annotate("text", x =1:10, y = 1.05, label = sprintf("p < %1.2g", round(MASC_test$masc.pval, 3) + 1e-3))
 
 readr::write_csv(df_meta_sub_group, sprintf("%s_number of cells included in each cluster per tissue source for B cell.csv", params$output_root))
+```
+
+```{r}
+df_meta_sub_group = df_meta_sub %>% 
+  filter(sample_ID !="300_0415")  %>%
+  group_by(sample_ID,cell_type,tissue_source,.drop = F) %>% 
+  summarize(value = n()) %>% 
+  ungroup() %>%
+  mutate (tissue_source = toupper(tissue_source))%>%
+  mutate(new.x =paste(sample_ID,tissue_source,sep = "_"))
+
+plt = ggplot(df_meta_sub_group %>% filter(!is.na(tissue_source)), aes(x = factor(new.x, levels = unique(new.x)), fill = cell_type, y = value)) + geom_bar(position="fill", stat="identity")+
+  theme_classic() + ylab('Proportion')  + xlab(NULL)+ scale_fill_manual('', values = cols) + guides(fill=guide_legend(title="Cluster")) +  
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) 
+
+plt
+readr::write_csv(df_meta_sub_group, sprintf("%s_Bar plot of the B cell cluster composition for each sample.csv", params$output_root))
 ```
