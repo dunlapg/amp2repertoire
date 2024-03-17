@@ -1,0 +1,181 @@
+---
+title: "B cell clustering for amp_phase2_gex project"
+author: "Baran, McDavid and Wang"
+subtitle: "Figure 5"
+date: '`r Sys.Date()`'
+params: 
+  qc_root: "refined/02clust_30PC_res05_harmonized__noSCT_Bcells_seurat.rds" # input Seurat or SingleCellExperiment rds
+  PCA_use: 30
+  run_harmony: TRUE
+  harmony_reduction_in: "pca"
+  harmony_covariates: "sample_ID"
+  clust_resolution: 0.5
+  covariates: ["sample_ID","tissue_source"]
+  ident_csv: "refined/02clust_30PC_res05_harmonized__noSCT_Bcells_cdat.csv"
+  random_effect: "sample_ID"
+  contrast_effect: "tissue_source"
+  fixed_effect: NULL
+  find_all_markers_args:
+    value:
+      max.cells.per.ident: 500
+      logfc.threshold: 0.5
+  MAST_test_csv: "refined/MASC_test.csv"
+  output_root: "refined/02clust_30PC_res05_harmonized__noSCT_Bcells"
+  cache: TRUE
+  use_sct: FALSE
+output:
+  rmdformats::html_clean:
+    code_folding: hide 
+    toc: yes
+    toc_float: yes
+editor_options: 
+  chunk_output_type: console
+---
+
+# Set up options
+
+```{r options, message = FALSE, warning = FALSE, results = 'hide'}
+cache = params$cache
+knitr::opts_chunk$set(echo = TRUE, cache=cache, autodep=cache, message=TRUE, warning=TRUE, cache.lazy = FALSE)
+knitr::opts_chunk$set(dev = c('png', 'pdf'))
+library(SingleCellExperiment)
+library(dplyr)
+library(forcats)
+library(ggplot2)
+library(harmony)
+library(Seurat)
+library(stringr)
+library(Matrix)
+library(sessioninfo)
+library(scales)
+#setwd("./Bcell")
+```
+
+This report was compiled with the following parameters:
+
+```{r, cache.whatever=params}
+print(params)
+# Define the category names
+ident <- c("B-Naïve(IgD_high)", "B-Naïve(IgD_low)", "B-Naïve(HSPA1B+)", "B-Mito_high", "B-Activated", "B-ABC", "B-Memory", "B-Clonal(LILRA4+)", "Plasmacells", "Plasmablasts", "BT-doublets")
+# Define the corresponding colors
+cols <- c("#A6CEE3", "#5399C6", "#3E9F32", "#99CD91", "#FDB762", "#CAC848", "#F47676", "#5C0905", "#CCAFCA", "#825D99","grey") 
+# Create a named vector
+cols <- setNames(cols, ident)
+
+tissue <- c("Syn","PBL")
+# Define the corresponding colors
+tissue_cols <- c("#F2A21E", "#88A0C4") 
+tissue_cols <- setNames(tissue_cols, tissue)
+```
+
+```{r dx, message = FALSE}
+message(packageVersion("Seurat"))
+message(.libPaths())
+readr::write_csv(package_info(), file = 'sess.txt')
+```
+
+# Load data
+```{r readtriplet, cache.whatever=list(params$qc_root)}
+ssce = readRDS(params$qc_root)
+meta_data <- read.csv(params$ident_csv,row.names = 1,header = T)
+meta_data$ident[is.na(meta_data$ident)] <-"BT-doublets"
+meta_data$ident <- gsub("\\bPlasma\\b", "Plasmacells", meta_data$ident)
+table(meta_data$ident)
+ssce= AddMetaData(object = ssce, metadata = meta_data)
+ssce@meta.data$ident = factor(ssce@meta.data$ident, levels = c("B-Naïve(IgD_high)","B-Naïve(IgD_low)","B-Naïve(HSPA1B+)","B-Mito_high",
+                                                               "B-Activated","B-ABC","B-Memory","B-Clonal(LILRA4+)","Plasmablasts","Plasmacells","BT-doublets"))
+```
+
+## Umap_plot for the B cell
+Fig 5.A
+```{r, cache.whatever = list(params$qc_root, file.mtime(params$ident_csv%||%'no_ident'))}
+umap_plot_1 = Seurat::DimPlot(ssce, label = FALSE, group.by = 'ident', cols = cols) + ggtitle("")
+umap_plot_1
+```
+
+```{r summarize_clusters}
+knitr::kable(table(ssce$sample_ID,ssce$ident))
+knitr::kable(table(ssce$tissue_source,ssce$ident))
+```
+
+## Dotplots used for finer clustering
+Fig 5.B
+```{r dotplot2, fig.width = 8, fig.height=5, cache.extra = list(file.mtime(params$ident_csv%||%'no_ident'))}
+# Not needed when the ident_csv is ordered
+#reorder idents for dotplots
+Idents(ssce) <- "ident"
+ssce <- subset(x = ssce, idents = "BT-doublets", invert = TRUE)
+ssce@active.ident = factor(ssce@active.ident, levels = c("B-Naïve(IgD_high)","B-Naïve(IgD_low)","B-Naïve(HSPA1B+)",
+                                            "B-Mito_high","B-Activated","B-ABC","B-Memory","Plasmablasts","Plasmacells"))
+ssce_small = subset(ssce, downsample = 300, idents = levels(Idents(ssce)))
+# Dot plots - the size of the dot corresponds to the percentage of cells expressing the
+# feature in each cluster. The color represents the average expression level
+dotplot_1 = Seurat::DotPlot(ssce_small, features = c('CD19', 'MS4A1', 'cite_CD20','TCL1A','IGHD','HSPA1B','TNFRSF13B', "NR4A1",'cite_CD27', 'HLA-DRB1','FGR','cite_CD11c', 'EMP3', "ZEB2", "PRDX4", 'XBP1','RPN2', 'IGHG1','IGHA1'),  cols = "PuOr", dot.scale = 5) + theme(axis.text.x = element_text(angle = 45, size = 10,vjust = 1, hjust = 1))
+
+dotplot_1
+```
+
+## Barplot of the number of cells included in each cluster
+Fig 5.C
+```{r B_T_breakdown, dev = c('png', 'pdf'), fig.width=10, fig.height=3.5}
+df_meta = ssce@meta.data %>% mutate(cell_type = ident)
+id_cols = c('library_id', 'Barcode', 'tissue_source', 'sample_ID', 'cell_type')
+df_meta_sub=df_meta[id_cols]
+df_meta_sub_group = df_meta_sub %>% group_by(cell_type) %>% summarize(total_cells = n()) %>% filter(cell_type != "B-Clonal(LILRA4+)")
+
+plt = ggplot(data=df_meta_sub_group, ggplot2::aes(x=cell_type, y=total_cells,fill=cell_type))+
+      ggplot2::geom_bar(stat="identity") + theme_classic() + 
+    theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.text = element_text(size =16)) + ylab(NULL) +
+  scale_fill_manual(values = cols) +NoLegend()
+
+plt
+readr::write_csv(df_meta_sub_group, sprintf("%s_number of cells included in each cluster for B cell.csv", params$output_root))
+```
+
+
+## Barplot of the number of cells included in each cluster
+Fig 5.D
+```{r entropy, dev = c('png', 'pdf'), fig.width = 12, fig.height=4}
+MASC_test = read.csv(params$MAST_test_csv,row.names = 1,header = T)
+colnames(MASC_test)[1] <- "cell_type"
+MASC_test <- MASC_test[-3,]
+
+df_meta_sub_group = df_meta_sub %>% 
+  group_by(cell_type, tissue_source, .drop = FALSE) %>% 
+  summarize(value = n()) %>% 
+  ungroup() %>%
+  filter(!is.na(tissue_source)) %>% filter(cell_type != "B-Clonal(LILRA4+)")
+
+plt = ggplot(df_meta_sub_group, aes(x = cell_type, fill = tissue_source, y = value)) + 
+  geom_bar(position="fill", stat="identity") + theme_classic() + ylab(NULL) + xlab(NULL) +
+  scale_fill_manual(values = tissue_cols) + 
+  theme(axis.text = element_text(size =16), 
+        legend.title = element_text(size =16),
+        legend.text = element_text(size =15),
+        axis.text.x = element_text(angle = 45, size = 16,vjust = 1, hjust = 1)) + 
+  labs(fill='Source') 
+ 
+plt + annotate("text", x =1:9, y = 1.06, label = sprintf("p < %1.2g", round(MASC_test$masc.pval, 3) + 1e-3), size=5)
+
+readr::write_csv(df_meta_sub_group, sprintf("%s_number of cells included in each cluster per tissue source for B cell.csv", params$output_root))
+```
+
+SFig 8.A
+```{r}
+df_meta_sub_group = df_meta_sub %>% 
+  filter(sample_ID !="300_0415")  %>%
+  group_by(sample_ID,cell_type,tissue_source,.drop = F) %>% 
+  summarize(value = n()) %>% 
+  ungroup() %>%
+  mutate (tissue_source = toupper(tissue_source))%>%
+  mutate(new.x =paste(sample_ID,tissue_source,sep = "_"))
+
+plt = ggplot(df_meta_sub_group %>% filter(!is.na(tissue_source)), aes(x = factor(new.x, levels = unique(new.x)), fill = cell_type, y = value)) + geom_bar(position="fill", stat="identity")+
+  theme_classic() + ylab('Proportion')  + xlab(NULL)+ scale_fill_manual('', values = cols) + guides(fill=guide_legend(title="Cluster")) +  
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) 
+
+plt
+readr::write_csv(df_meta_sub_group, sprintf("%s_Bar plot of the B cell cluster composition for each sample.csv", params$output_root))
+```

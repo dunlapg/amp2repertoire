@@ -1,0 +1,305 @@
+---
+title: "Rates of Somatic Hypermutation for amp_phase2_vdj project"
+author: "Wagner, McDavid and Wang"
+date: '`r Sys.Date()`'
+params:
+   all_contigs_ccdb: "refined/B_contigs_ccdb.rds"
+   celltype: "B"
+   min_cdr3_length: 5
+   min_cdr3_dna_length: 15
+   cdr3_identity: 0.965
+   ident_etc_csv: "refined/02clust_30PC_res05_harmonized__noSCT_Bcells_cdat.csv"
+   knitr_cache: FALSE
+output:
+  html_document:
+    code_folding: hide
+    toc: yes
+    toc_float: yes
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, autodep=TRUE, message=FALSE, warning=FALSE, fig.height = 3.5,dev = c('png', 'pdf'))
+knitr_cache = params$knitr_cache
+knitr::opts_chunk$set(cache = knitr_cache, autodep = knitr_cache, cache.lazy = FALSE)
+```
+
+```{r setup, include = FALSE}
+library(CellaRepertorium)
+library(ggbeeswarm)
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(tidyr)
+library(stringr)
+library(purrr)
+library(knitr)
+library(ggraph)
+library(igraph)
+library(rmdformats)
+library(broom.mixed)
+library(vegan)
+library(ggridges)
+library(scales)
+#setwd("./B")
+```
+
+This file was rendered with the following parameters:
+```{r}
+print(params)
+# Define the category names
+ident <- c("B-Naïve(IgD_high)", "B-Naïve(IgD_low)", "B-Naïve(HSPA1B+)", "B-Mito_high", "B-Activated", "B-ABC", "B-Memory", "B-Clonal(LILRA4+)", "Plasmacells", "Plasmablasts", "BT-doublets")
+# Define the corresponding colors
+colors <- c("#A6CEE3", "#5399C6", "#3E9F32", "#99CD91", "#FDB762", "#CAC848", "#F47676", "#5C0905", "#CCAFCA", "#825D99","grey") 
+# Create a named vector
+category_colors <- setNames(colors, ident)
+
+cluster_order = c("B-Naïve(IgD_high)","B-Naïve(IgD_low)","B-Naïve(HSPA1B+)","B-Mito_high","B-Activated",
+                  "B-ABC","B-Memory","B-Clonal(LILRA4+)","Plasmablasts","Plasmacells")
+
+# Color schemes and order of cell populations:
+tissue <- c("Syn","PBL")
+# Define the corresponding colors
+tissue_cols <- c("#F2A21E", "#88A0C4") 
+tissue_cols <- setNames(tissue_cols, tissue)
+```
+
+# Load filtered contig files
+We begin with a dataframe of contigs from the `r params$celltype` cells that have passed through initial quality control.
+```{r read_data}
+cdb = readRDS(params$all_contigs_ccdb)
+
+if(!is.null(params$ident_etc_csv)){
+  ident_etc = readr::read_csv(params$ident_etc_csv) %>% select(has_vdj, discard, keep, Barcode, ident, umap_1, umap_2)
+  ident_etc$ident[is.na(ident_etc$ident)] <-"BT-doublets"
+  ident_etc$ident <- gsub("\\bPlasma\\b", "Plasmacells", ident_etc$ident)
+  cdb$cell_tbl = left_join(cdb$cell_tbl, ident_etc)
+}
+
+#Reorder idents to match other plots
+cdb$cell_tbl$ident = factor(cdb$cell_tbl$ident, levels = c("B-Naïve(IgD_high)","B-Naïve(IgD_low)","B-Naïve(HSPA1B+)","B-Mito_high",
+                                                           "B-Activated","B-ABC","B-Memory","Plasmablasts","Plasmacells","B-Clonal(LILRA4+)"))
+
+#mutate in shm rates:
+cdb$contig_tbl = cdb$contig_tbl %>% mutate(v_germ_length = v_germline_end - v_germline_start,
+                                             j_germ_length = j_germline_end - j_germline_start,vshm = (1-v_identity)*v_germ_length,
+                                             jshm = (1-j_identity)*j_germ_length,shm = vshm + jshm,
+                                             len_without_d = v_germ_length + j_germ_length, vj_shm_rate = (shm/len_without_d))
+```
+
+```{r sample_Id_recode}
+#Some reason ContigCellDB doesn't play well with dplyr::recode, contig_tbl loses basically all recodes with a match when directly updating with cdb$contig_tbl = cdb$contig_tbl %>% mutate(recode())
+cell_tbl_recode = cdb$cell_tbl %>% mutate(sample_ID = recode(sample_ID,
+                             '300_0150' = 'RA01',
+                             '300_0171' = 'RA02',
+                             '300_0173' = 'RA03',
+                             '300_0174' = 'RA04',
+                             '300_0392' = 'RA05',
+                             '300_0410' = 'RA06',
+                             '300_0414' = 'RA07',
+                             '300_0416' = 'RA08',
+                             '300_1883' = 'RA09',
+                             '300_1930' = 'RA10',
+                             '301_0174' = 'RA11',
+                             '301_0270' = 'RA12'))
+
+contig_tbl_recode = cdb$contig_tbl %>% mutate(sample_ID = recode(sample_ID,
+                             '300_0150' = 'RA01',
+                             '300_0171' = 'RA02',
+                             '300_0173' = 'RA03',
+                             '300_0174' = 'RA04',
+                             '300_0392' = 'RA05',
+                             '300_0410' = 'RA06',
+                             '300_0414' = 'RA07',
+                             '300_0416' = 'RA08',
+                             '300_1883' = 'RA09',
+                             '300_1930' = 'RA10',
+                             '301_0174' = 'RA11',
+                             '301_0270' = 'RA12'))
+
+cdb@cell_tbl = cell_tbl_recode
+cdb@contig_tbl = contig_tbl_recode
+```
+
+Initially we start with  `r nrow(cdb)` cells and `r nrow(cdb$contig_tbl)` contigs.  We keep contigs that are 
+* full - length 
+* productive
+* high-confidence
+* and with CDR3 sufficiently long, in this report, contigs with CDR3 string length at least `r params$min_cdr3_length`
+
+```{r filtering}
+cdb$contig_tbl = dplyr::filter(cdb$contig_tbl, full_length, productive == 'True', high_confidence, chain != 'Multi', 
+                               str_length(cdr3) > params$min_cdr3_length, str_length(cdr3_nt) > params$min_cdr3_dna_length)
+#Add in cell-level SHM rates
+cell_shm = cdb$contig_tbl %>% group_by(!!!syms(cdb$cell_pk)) %>% summarize(shm = mean(vj_shm_rate, na.rm = TRUE))
+cdb$cell_tbl = left_join(cdb$cell_tbl, cell_shm, by = cdb$cell_pk)
+```
+
+Before filtering
+```{r pairing-ident-post, warning=FALSE}
+paired_chain = enumerate_pairing(cdb, chain_recode_fun =  if(params$celltype=='B') ig_chain_recode else tcr_chain_recode)
+cdb$cell_tbl  = left_join_warn(paired_chain, cdb$cell_tbl, overwrite = TRUE, by = cdb$cell_pk)
+```
+
+Fig 5.F
+Note that for T cells, the "SHM" is just measuring the average number of substitutions vs germline -- not implying hypermutation has taken place in the T cells.
+Plot UMIs per cell receptor vs UMAP
+Violin plot of this vs identity.
+
+```{r, eval = as.logical(params$celltype == 'B'), fig.width = 8, fig.height=4}
+valid_idents_for_fit = cdb$cell_tbl %>% filter(!is.na(ident) & ident != "B-Clonal(LILRA4+)")
+mixed.lmer <- lmerTest::lmer(shm~ident +(1|sample_ID) , data = valid_idents_for_fit) 
+mixed.lmer_sum <- summary(mixed.lmer)
+shm_fit = mixed.lmer_sum$coefficients
+shm_fit =as.data.frame(shm_fit)
+shm_fit
+label.df = data.frame(ident=rownames(shm_fit)[-1],p_value=shm_fit[,"Pr(>|t|)"][-1], shm = .2)
+label.df$ident = sub("ident", "", label.df$ident)
+
+mut_plot = ggplot(cdb$cell_tbl %>% filter(!is.na(ident) & ident != "B-Clonal(LILRA4+)"), 
+                  aes(y = shm * 100, x = factor(ident, levels = c("B-Naïve(IgD_high)", "B-Naïve(IgD_low)", "B-Naïve(HSPA1B+)", "B-Mito_high", 
+                                                                  "B-Activated", "B-ABC", "B-Memory", "Plasmablasts", "Plasmacells")))) + 
+  ylab("V/J SHM %")+ theme_minimal() + theme(strip.text.x = element_text(size = 6)) + ylim(0,30)
+
+shm_plot = mut_plot + 
+  geom_quasirandom(aes(color = ident), size = .5)  + 
+  stat_summary(color = 'blue', position = position_dodge2(width = .8)) + 
+  theme_classic(base_size = 16)+ 
+  theme(legend.position = 'none', strip.text.x = element_text(size = 8),
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  scale_color_manual(values = category_colors) + 
+  geom_text(data = label.df, aes(label = sprintf("p < %1.2g", round(p_value, 3) + 1e-3)), size = 4.5, hjust = 0.5, y = 30)+
+  labs(x ="", y = paste("V/J SHM %")) 
+
+shm_plot
+readr::write_csv(shm_fit, "refined/shm_fit for clusters.csv")
+```
+
+Fig 5.G
+# Rates of Somatic Hypermutation (Only for B cells)
+
+# Fit linear mixed effects model using lmer4 to rates of somatic hypermutation with fixed effect for tissue source and random effect for sample
+Fixed effect estimates are maximum likelihood estimates, using $\beta \pm 1.96*SE_{\beta}$ for confidence interval
+
+```{r SHM_exploration, eval = as.logical(params$celltype == 'B'), fig.width = 6, fig.height=3.5}
+library(broom.mixed)
+shm_fitting = function(cdb) {
+  #get populations that have at least 1pbl & 1syn cell
+  valid_idents_for_fit = cdb$cell_tbl %>% group_by(ident) %>% summarise(n_tissue = length(unique(tissue_source))) %>% filter(!is.na(ident),n_tissue == 2) %>% pull(ident)
+  
+  #subset cdb
+  cell_tbl_valid = cdb$cell_tbl %>% filter(ident %in% valid_idents_for_fit)
+  
+  #fit lme4::lmer
+  shm_fit = cell_tbl_valid %>% group_by(ident) %>% 
+  summarize(fit = list(lme4::lmer(shm ~ tissue_source + (1|sample_ID)))) %>%
+  rowwise() %>% 
+  mutate(td = list(tidy(fit, effects = 'fixed')))
+  
+  #retreive coefficients
+shm_coef = shm_fit %>% select(ident, td) %>% unnest(cols= c(td)) %>% filter(term != '(Intercept)') %>% mutate(p_value = 2*(1-pnorm(abs(statistic))), ci_low = estimate - 1.96*std.error,ci_hi = estimate + 1.96*std.error, tissue_significant = case_when(ci_low > 0 ~ 'Syn', ci_hi < 0 ~ 'PBL', ci_low < 0 & ci_hi > 0 ~ 'NS'))
+
+knitr::kable(shm_coef %>% arrange(desc(statistic)))
+return(shm_coef)
+}
+
+shm_fit = shm_fitting(cdb = cdb)
+shm_fit
+
+label.df = shm_fit %>% select(ident, p_value)  %>% mutate(shm = .2, tissue_source = 'Syn')
+
+mut_plot = ggplot(cdb$cell_tbl %>% filter(!is.na(ident) & ident != "B-Clonal(LILRA4+)"), aes(y = shm * 100, x = tissue_source)) + 
+  ylab("V/J SHM %")+ facet_wrap(~ident, ncol = 3) + theme_minimal() + theme(strip.text.x = element_text(size = 6),  strip.background = element_rect(
+     color="black", fill="lightblue", linetype="solid")) + scale_color_manual(values = tissue_cols)
+
+shm_plot = mut_plot + 
+  geom_quasirandom(aes(color = tissue_source), size = .5)  + 
+  stat_summary(color = 'blue', position = position_dodge2(width = .8)) + 
+  theme(legend.position = 'none', strip.text.x = element_text(size = 8)) +
+  geom_text(data = label.df, aes(x=1.5, y= 22, label = sprintf("p < %1.2g", round(p_value, 3) + 1e-3)))
+
+shm_plot
+readr::write_csv(shm_fit, "refined/shm_fit for tissue.csv")
+```
+
+# Useful themes
+```{r}
+#Hopefully this theme should apply to all plots and looks good
+clean_theme = function(y_title = FALSE) {theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"),axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),axis.title.x = element_blank(),axis.title.y = element_blank())}
+
+clean2 = function() {theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"),axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),axis.title.x = element_blank())}
+
+no_grid = function() {theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))}
+
+set_texts = function(s = 6.5) {theme(axis.text = element_text(size = s), legend.text = element_text(size = s), legend.title = element_text(size = s))}
+```
+
+# Seurat and Cellarepertorium object to make plots:
+```{r}
+#Load and preprocess BCR data
+B_contigs_DNA = readRDS("./refined/B_contigs_DNA.rds") %>% filter_cdb(sample_ID != '300_0415',!is.na(ident),ident != 'B-Clonal(LILRA4+)',tbl = 'cell_tbl') %>% filter_cdb(sample_ID != '300_0415',!is.na(ident),ident != 'B-Clonal(LILRA4+)', tbl = 'contig_tbl')
+
+enforce_cluster_order = function(col, levs = cluster_order) {factor(col, levels = levs)}
+B_contigs_DNA@cell_tbl$ident = enforce_cluster_order(B_contigs_DNA@cell_tbl$ident)
+B_contigs_DNA@contig_tbl$ident = enforce_cluster_order(B_contigs_DNA@contig_tbl$ident)
+B_contigs_DNA@cell_tbl$tissue_source = toupper(B_contigs_DNA@cell_tbl$tissue_source)
+B_contigs_DNA@contig_tbl$tissue_source = toupper(B_contigs_DNA@contig_tbl$tissue_source)
+
+B_contigs_heavy = canonicalize_cell(B_contigs_DNA %>% filter_cdb(chain == 'IGH',tbl = "contig_tbl"),contig_fields = 'DNA97')
+```
+
+```{r subset_downstream}
+##Filter out BT doublets and B-clonal(LILRA4+) [All downstream analysis does not include BT doublets, clonal, or cells without 5']
+ssce = subset(cdb, subset = ident != "B-Clonal(LILRA4+)" & !is.na(ident))
+cluster_order_new = cluster_order[which(cluster_order != 'B-Clonal(LILRA4+)')]
+B_contigs_heavy@cell_tbl$ident = enforce_cluster_order(B_contigs_heavy@cell_tbl$ident,levs = cluster_order_new)
+B_contigs_heavy@contig_tbl$ident = enforce_cluster_order(B_contigs_heavy@contig_tbl$ident,levs = cluster_order_new)
+```
+
+Fig 5.H
+```{r c_gene_ident}
+heavy_chain_ident = cdb %>%  canonicalize_cell(contig_fields = 'c_gene', contig_filter_args = chain=='IGH') %>% `$`('cell_tbl') %>%
+  mutate(c_gene = factor(c_gene, levels = c('No VDJ', 'IGHD', 'IGHM', 'IGHG1', 'IGHG2', 'IGHG3', 'IGHG4', 'IGHA1', 'IGHA2')) , c_gene = forcats::fct_explicit_na(c_gene, na_level = 'No VDJ') %>% forcats::fct_rev())
+
+heavy_chain_ident_wide = heavy_chain_ident %>% 
+  filter(!is.na(ident))  %>%
+  group_by(tissue_source,ident,c_gene, .drop = F) %>% 
+  summarize(value = n()) %>% 
+  filter(c_gene != "No VDJ") %>%
+  ungroup() %>%
+  mutate (tissue_source = toupper(tissue_source))%>%
+  mutate(new.x =paste(ident,tissue_source,sep = "_"))   %>%
+  filter(ident != "B-Clonal(LILRA4+)") %>%
+  arrange(c_gene,ident)
+
+chain_pal = c('No VDJ' = 'grey80', 'IGHD' = "#FC9272", 'IGHM'="#DE2D26", 'IGHG1'= "#EFF3FF", 'IGHG2' = "#BDD7E7", 'IGHG3' = "#6BAED6", 'IGHG4' = "#2171B5", 'IGHA1' = "#A1D99B", 'IGHA2' = "#31A354")
+
+Tissue_cols <- ifelse(grepl("SYN", heavy_chain_ident_wide$new.x), "#F2A21E", "#88A0C4")
+isotype_plot = ggplot(heavy_chain_ident_wide %>% filter(!is.na(ident)), aes(x = factor(new.x, levels = unique(new.x)), fill = c_gene, y = value)) + geom_bar(position="fill", stat="identity")+
+  theme_classic() + ylab('Proportion')  + scale_fill_manual('', values = chain_pal) + guides(fill=guide_legend(title="IGH Isotype")) +  
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1,colour = Tissue_cols)) 
+
+isotype_plot
+
+readr::write_csv(heavy_chain_ident_wide, "refined/IGH_isotype_plot.csv")
+```
+
+Fig 5.I
+```{r class_switch_test}
+c_gene_cells = B_contigs_heavy %>% canonicalize_cell(contig_fields = 'c_gene') %>% `$`('cell_tbl') %>%
+  mutate(c_gene = factor(c_gene, levels = c('No VDJ', 'IGHD', 'IGHM', 'IGHG1', 'IGHG2', 'IGHG3', 'IGHG4', 'IGHA1', 'IGHA2')) , c_gene = forcats::fct_explicit_na(c_gene, na_level = 'No VDJ') %>% forcats::fct_rev()) %>% mutate(class_switched = ifelse(c_gene %in% c('IGHD','IGHM'),FALSE,TRUE)) %>% mutate(ident_tissue = interaction(ident,tissue_source,lex.order = TRUE,sep = '_'))
+
+class_switch_test = lme4::glmer(class_switched ~ ident + tissue_source + (1|sample_ID), data = c_gene_cells, family = binomial) %>% tidy(effects = 'fixed') %>% filter(term != '(Intercept)') %>% mutate(ci_low = estimate - 1.96*std.error,ci_hi = estimate + 1.96*std.error, ident = gsub("ident","",term))
+
+class_switch_test$ident[9] = "SYN effect"
+
+class_switch_test$ident = enforce_cluster_order(class_switch_test$ident,levs = c(cluster_order_new,"SYN effect"))
+
+category_colors = category_colors[-length(category_colors)]
+iso_test = ggplot(class_switch_test, aes(x = ident, y = estimate, ymin = ci_low, ymax = ci_hi)) + geom_pointrange(position = position_dodge(width = .3),aes(colour=ident)) + scale_color_manual(values = c(category_colors,"darkred")) + clean2() + geom_hline(yintercept = 0) + ylab("Effect of cell identity and \n tissue on IgH class-switching") + theme(legend.position = "none") + set_texts()
+
+iso_test
+
+write.csv(class_switch_test,file = "class_switch_test.csv")
+```
