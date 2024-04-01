@@ -1,0 +1,251 @@
+---
+title: "QC and pre-processing for amp_phase2_gex project"
+subtitle: "Template version 0.2.4"
+author: "Baran and McDavid"
+date: '`r Sys.Date()`'
+params: 
+   tenx_root: "scratch/AGG1" # path to raw_feature_bc_matrix tsv mtx triplet
+   tenx_h5: NULL # or path to h5. provide only one
+   sample_sheet: "all_samples_file.csv" # see ?make_sample_sheet
+   qc_output: "refined/qc" #prefix for output
+   citeseq_str: 'TotalA' # regular expression matched in `rowData(sce)$Symbol` that identifies "altExp" features. 
+                     # See ?partition_citeseq
+   batch_var: 'tissue_source'   # if non-null, length-1 character to stratify in cell calling, etc
+   covariates: ['dataset', 'sample_ID', 'tissue_source']  #character naming fields in colData to use for plots.  First component should be "most" important value.
+   auto_filter: "FALSE" # Should auto-filtering be run
+   doublet_detect: ['cxds', 'scDblFinder']
+   scDblFinder_args: NULL # or list of arguments, eg `clusters` or `knownDoublets`
+   sce_subset: "sce = sce[,sce$detected>500] sce = sce[, sce$subsets_Mito_percent<20]" # character R expression use to subset after QC is run (right before writing data) # should assign to object `sce`
+output:
+  rmdformats::html_clean:
+    code_folding: hide
+    toc: yes
+    toc_float: yes
+---
+  
+# Set up options
+  
+```{r options, message = FALSE, warning = FALSE, results = 'hide'}
+knitr::opts_chunk$set(echo = TRUE, cache=TRUE, autodep=TRUE, message=FALSE, warning=FALSE, cache.lazy = FALSE)
+knitr::opts_chunk$set(dev = c('png', 'pdf'))
+library(GeneseeSC)
+library(dplyr)
+library(SingleCellExperiment)
+library(scater)
+library(DropletUtils)
+library(ggplot2)
+library(RColorBrewer)
+```
+
+This report was compiled with the following parameters:
+```{r, cache.whatever=params}
+print(params)
+```
+
+# Load data
+```{r read10x, cache.whatever=list(params$tenx_root, params$citeseq_str)}
+if(!is.null(params$tenx_root)){
+  agg_raw_data = file.path(params$tenx_root, "outs", "raw_feature_bc_matrix")
+  sce = DropletUtils::read10xCounts(agg_raw_data, type="sparse")
+} else if(!is.null(params$tenx_h5)){
+  sce = DropletUtils::read10xCounts(params$tenx_h5, type="auto")
+  assay(sce) = as(assay(sce), 'sparseMatrix')
+} else{
+  stop("Must provide path to hdf5 format `tenx_h5` or directory with tsv and mtx with `tenx_root`")
+}
+
+if (length(params$citeseq_str)>0){
+  sce = partition_citeseq(sce, params$citeseq_str)
+}
+out_size = dim(sce)
+```
+
+There were `r out_size[1]` features collected on `r out_size[2]` cells.
+
+# Samples present
+
+```{r, results = 'asis', cache.whatever=list(params$tenx_root, params$sample_sheet, params$citeseq_str)}
+sample_sheet = read.csv(params$sample_sheet)
+print(knitr::kable(sample_sheet, caption = "Sample Sheet"), "html", table.attr='class="flat-table"')
+```
+
+# Link with metadata from sample sheet
+```{r expandmeta, results='asis', cache.whatever=list(params$tenx_root, params$sample_sheet, params$batch_var, params$citeseq_str)}
+#create metadata for sample based on suffix AGGR adds
+sce = expand_metadata(sce, sample_sheet)
+
+count_cells = function(sce, stage){
+  colData(sce) %>% as.data.frame() %>% 
+  group_by(!!!syms(params$batch_var)) %>% 
+  summarize(n_cells = n(), .groups = 'drop') %>% mutate(stage = stage)
+} 
+qc_table = count_cells(sce, 'droplets')
+multiple_batches = length(params$batch_var) > 0 
+
+```
+
+`r if(multiple_batches) {"QC will use batch info"}`
+`r if(multiple_batches) {print(params$batch_var)}`
+
+# Cell calling (don't drop)
+
+```{r cell_call, results='asis', cache.whatever=list(params$tenx_root, params$sample_sheet, params$batch_var, params$citeseq_str)}
+sce = default_cell_call(sce, params$batch_var, params$covariates[1], drop_empty = FALSE)
+sce$called_cell = as.vector(sce$is_cell)
+```
+
+
+## VDJ Discordant Data
+
+```{r}
+vdj_dat = list(b = readr::read_csv('extradata/B_no_filter_contigs_cell.csv', guess_max = 1e4),
+               t = readr::read_csv('extradata/T_no_filter_contigs_cell.csv', guess_max = 1e4)) %>%
+  bind_rows(.id = 'celltype') %>%
+  dplyr::select(barcode, sample_ID, tissue_source, sort_group, rawdata_batch, pairing, n_celltypes) 
+
+vdj_dat_uniq = vdj_dat %>%dim(sce)
+  group_by(across(barcode:rawdata_batch)) %>% summarize(pairing = any(pairing == 'paired'), n_celltypes = max(n_celltypes), .groups = 'drop') # 300_0171  PBL 1 vs 2 issues.  sample_ID_unique disambiguates these
+
+sce_j = colData(sce) %>% as.data.frame() %>% transmute(barcode = gsub('-[0-9]+', '-1', Barcode),
+                                                       sample_ID, tissue_source, sort_group, rawdata_batch, is_cell)
+vdj_sce = left_join(sce_j, vdj_dat_uniq)
+stopifnot(nrow(sce_j) == nrow(vdj_sce))
+
+sce$has_vdj = case_when(is.na(vdj_sce$pairing) ~ 'No' , vdj_sce$pairing ~ 'Paired chain', TRUE ~ 'Single chain')
+sce$vdj_twocelltypes = !is.na(vdj_sce$n_celltypes) & vdj_sce$n_celltypes > 1
+
+# Take no more than 10,000 of each combination of VDJ pairing/presence and called cells
+subsample_barcodes = colData(sce) %>% as.data.frame() %>% mutate(idx = seq_len(nrow(.))) %>% group_by(has_vdj, called_cell) %>% slice_sample(n = 1e4)
+
+sce_sub = sce[,subsample_barcodes$idx]
+sce_sub$numis = colSums(assay(sce_sub))
+sce_sub$ngenes=colSums(assay(sce_sub)>0)
+```
+
+
+```{r}
+ggcells(sce_sub, mapping=aes(x=log10(numis), fill=called_cell)) + 
+    geom_density() + geom_density(alpha = .3) + facet_wrap(~has_vdj) +ggtitle('Distribution of nUMIs by cell status within BCR/TCR groups')
+
+ggcells(sce_sub, mapping=aes(x=log10(ngenes), fill=called_cell)) + 
+    geom_density() + geom_density(alpha = .3) + facet_wrap(~has_vdj) +ggtitle('Distribution of nGenes by cell status within BCR/TCR groups')
+
+
+ggcells(sce_sub, mapping=aes(x=log10(numis), fill=has_vdj)) + 
+    geom_density() + geom_density(alpha = .3) + facet_wrap(~called_cell + tissue_source)+ggtitle('Distribution of nUMIs by BCR/TCR status within cell status')
+ggcells(sce_sub, mapping=aes(x=log10(ngenes), fill=has_vdj)) + 
+    geom_density() + geom_density(alpha = .3) + facet_wrap(~called_cell + tissue_source)+ggtitle('Distribution of nGenes by BCR/TCR status within cell status')
+
+```
+
+## Define cells (for real)
+
+```{r}
+sce = sce[, (colSums(assay(sce))>1000 & sce$tissue_source=='Syn') | (colSums(assay(sce))>1000 & sce$tissue_source=='PBL')]
+qc_table = count_cells(sce, 'cells') %>% bind_rows(qc_table)
+pre_qc_coldata = colData(sce) %>% as.data.frame()
+```
+
+```{r}
+table(initially_called_cell = sce$called_cell, vdj = sce$has_vdj)
+```
+
+# Default QC and normalization
+
+```{r QCnorm, results='asis', cache.whatever=list(params$tenx_root, params$sample_sheet, params$batch_var, params$citeseq_str, params$auto_filter)}
+sce = default_qc(sce, params$batch_var, params$auto_filter, params$covariates) #Doesn't filter anything because auto_filter == FALSE
+post_qc_coldata = colData(sce) %>% as.data.frame()
+if (params$auto_filter){
+qc_table = count_cells(sce, 'qc_pass') %>% bind_rows(qc_table)
+}
+```
+# Doublet detection
+
+## cxds
+
+```{r doub_detect_cxds, results='asis', cache.whatever=list(params$tenx_root, params$sample_sheet, params$batch_var, params$citeseq_str, params$doublet_detect), eval = 'cxds' %in% params$doublet_detect}
+sce = doublet_detect_cxds(sce, params$batch_var)
+doublet_flag(sce, params$covariates, score_field = 'cxds_score', 'is_singlet_cxds')
+```
+
+## scDblFinder
+
+```{r, eval = 'scDblFinder' %in% params$doublet_detect, results='asis', cache.whatever=list(params$tenx_root, params$doublet_detect)}
+library(scDblFinder)
+# Need version 1.5.16 in Bioc Devel to use known celltypes
+#sce = call_intercalate(f = scDblFinder, sce = sce, samples = 'library_id', extra = params$scDblFinder_args)
+# 
+sce = sce[,sce$dataset!='301_0174_Syn_23'] # breaks scDblFinder
+sce = scDblFinder(sce = sce, samples = sce$library_id)
+sce$is_singlet_scDbl = (sce$scDblFinder.class == 'singlet')
+doublet_flag(sce, params$covariates, score_field = 'scDblFinder.score', 'is_singlet_scDbl')
+```
+
+# Normalize
+
+```{r norm, results='asis', cache.whatever=list(params$tenx_root, params$sample_sheet, params$batch_var, params$citeseq_str, params$auto_filter)}
+polish_ss = polish_samplesheet_vars(colData(sce)[intersect(names(colData(sce)), names(sample_sheet))])
+sce = scater::logNormCounts(sce)
+#vars = scater::getVarianceExplained(sce, variables = polish_ss)
+#knitr::kable(head(vars))
+#scater::plotExplanatoryVariables(vars)
+```
+
+```{r}
+saveRDS(sce, file = "extradata/PreQCdata.rds")
+```
+
+
+## Optional Subset
+
+```{r subset, eval = !is.null(params$sce_subset), code = params$sce_subset}
+```
+
+```{r filter_tag, dev = c('png', 'pdf'), fig.width = 7, fig.height=3.5}
+library(dplyr)
+library(forcats)
+library(ggplot2)
+
+final_qc_cdata = colData(sce) %>% as.data.frame() %>% mutate(post_qc = 'Use')
+id_cols = c('library_id', 'Barcode', 'tissue_source', 'sample_ID', 'has_vdj', 'vdj_twocelltypes')
+coldata_comp = left_join(pre_qc_coldata[id_cols], final_qc_cdata) %>%
+  mutate(post_qc = ifelse(is.na(post_qc), 'Filtered', post_qc),
+         doublet = ifelse(is_singlet_scDbl & !vdj_twocelltypes, 'singlet', 'doublet'))
+
+total_syn = final_qc_cdata %>% filter(tissue_source == 'Syn') %>% group_by(sample_ID) %>% 
+  summarize(total_cells = n())
+
+coldata_comp = left_join(coldata_comp, total_syn) %>% ungroup() %>%
+  mutate(sample_ID = fct_reorder(sample_ID, total_cells))
+
+plt = ggplot(data=coldata_comp, ggplot2::aes(x=sample_ID)) + theme_minimal() + theme(axis.text.x = ggplot2::element_text(angle = 90)) + facet_grid(~tissue_source) + ylab("Cells") + xlab(NULL)
+
+plt + aes(fill = post_qc) +
+        ggplot2::geom_bar() + scale_fill_discrete('Cell Quality')
+
+(plt %+% filter(coldata_comp, post_qc == 'Use')) +
+        ggplot2::geom_bar() + aes(fill = has_vdj) + scale_fill_discrete('VDJ')
+(plt %+% filter(coldata_comp, post_qc == 'Use')) +
+        ggplot2::geom_bar()  + aes(fill = doublet) + scale_fill_discrete('')
+
+```
+
+```{r preqc, dev = c('png', 'pdf'), fig.width = 7, fig.height = 3.5}
+post_subset_coldata = left_join(colData(sce) %>% as.data.frame, total_syn) %>% ungroup() %>%
+  mutate(sample_ID = fct_reorder(sample_ID, total_cells))
+
+(plt %+% post_subset_coldata) + aes(y = detected)+
+        ggbeeswarm::geom_quasirandom() + ylab("Genes detected")
+
+(plt %+% post_subset_coldata) + aes(y = log10(sum)) +
+        ggbeeswarm::geom_quasirandom() + ylab("log10 UMIs")
+
+(plt %+% post_subset_coldata) + aes(y = subsets_Mito_percent) +
+        ggbeeswarm::geom_quasirandom() + ylab("% UMIs Mitochrondial")
+
+```
+
+## Save qc'd data
+```{r, cache.whatever=list(params$tenx_root, params$sample_sheet, params$batch_var, params$qc_output, params$citeseq_str, params$auto_filter)}
+to_sparse_triplet(sce, params$qc_output)
+```
